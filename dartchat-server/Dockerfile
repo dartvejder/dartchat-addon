@@ -1,0 +1,20 @@
+# The upstream image contains only the server binary and its libraries, with
+# no shell. We copy those into a small Alpine image so a start script can read
+# the add-on options.
+FROM jadedblueeyes/continuwuity:v26.9.4 AS server
+
+FROM alpine:3.22
+
+RUN apk add --no-cache jq ca-certificates
+
+# Keep the server's own loader and libraries together in one folder so they
+# never mix with Alpine's.
+COPY --from=server /sbin/conduwuit /opt/continuwuity/conduwuit
+COPY --from=server /lib64/ld-linux-x86-64.so.2 /opt/continuwuity/lib/
+COPY --from=server /usr/lib/ /opt/continuwuity/lib/
+
+COPY run.sh /run.sh
+RUN chmod 0755 /run.sh
+
+EXPOSE 6167
+ENTRYPOINT ["/run.sh"]

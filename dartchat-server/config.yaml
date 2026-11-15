@@ -1,0 +1,27 @@
+name: Dart Chat Server
+version: "0.1.0"
+slug: dartchat_server
+description: Private end-to-end encrypted chat server for Dart Chat
+url: https://github.com/dartvejder/dartchat-addon
+arch:
+  - amd64
+init: false
+startup: application
+boot: auto
+# The database is copied while the server is stopped, so backups are consistent.
+backup: cold
+ports:
+  6167/tcp: 6167
+ports_description:
+  6167/tcp: Chat server (point your Cloudflare Tunnel here)
+watchdog: http://[HOST]:[PORT:6167]/_matrix/client/versions
+options:
+  server_name: ""
+  registration_token: ""
+  max_upload_mb: 20
+  log_level: info
+schema:
+  server_name: str
+  registration_token: password?
+  max_upload_mb: int(1,100)
+  log_level: list(error|warn|info|debug)

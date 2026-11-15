@@ -3,6 +3,7 @@
 ## 0.7.0
 
 - The owner's phone gets a "Someone you invited has joined" notification when an invited friend creates their account. The notification names nobody; the app shows who it was under Invitations and accounts. It reaches the phones the owner has opened the invitation screen on.
+- Groups are now the owner's business: only the owner can create a group or add people to one. Everyone else can still start a chat with one person (inside their circle) and accept group invitations. The server enforces this, so it also holds for other Matrix apps. Groups that already exist stay as they are, but their members can no longer add people.
 
 ## 0.6.0
 

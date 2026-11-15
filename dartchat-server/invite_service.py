@@ -643,8 +643,8 @@ GUARDED = re.compile(
     r"|profile/(?P<profile>[^/]+)(?:/[^/]*)?"
     r"|presence/(?P<presence>[^/]+)/status"
     r"|(?P<create>createRoom)"
-    r"|rooms/[^/]+/(?P<invite>invite)"
-    r"|rooms/[^/]+/state/m\.room\.member/(?P<member>[^/]+)"
+    r"|rooms/(?P<invite_room>[^/]+)/(?P<invite>invite)"
+    r"|rooms/(?P<member_room>[^/]+)/state/m\.room\.member/(?P<member>[^/]+)"
     r"|keys/(?P<keys>query|claim)"
     r"|(?P<login>login)"
     r"|(?P<register>register(?:/available)?)"
@@ -748,6 +748,70 @@ def may_see(user_id, token, target):
     return may_contact(user_id, target) or target in room_mates(user_id, token)
 
 
+owner_cache = {}
+
+
+def is_owner(user_id, token):
+    """Whether the caller is a server owner (a member of the admin room)."""
+    global admin_room_id
+    with store.lock:
+        if user_id in store.data["owners"]:
+            return True
+    now = time.time()
+    with cache_lock:
+        cached = owner_cache.get(user_id)
+        if cached and cached[1] > now:
+            return cached[0]
+    if admin_room_id is None:
+        alias = quote(f"#admins:{SERVER_NAME}")
+        status, body = chat("GET", f"/directory/room/{alias}", token=token)
+        if status == 200 and "room_id" in body:
+            admin_room_id = body["room_id"]
+    owner = False
+    if admin_room_id is not None:
+        status, body = chat("GET", "/joined_rooms", token=token)
+        owner = status == 200 and admin_room_id in body.get("joined_rooms", [])
+    with cache_lock:
+        if len(owner_cache) > 5000:
+            owner_cache.clear()
+        owner_cache[user_id] = (owner, now + ROOM_CACHE_SECONDS)
+    if owner:
+        with store.lock:
+            if user_id not in store.data["owners"]:
+                store.data["owners"].append(user_id)
+                store.save()
+    return owner
+
+
+def runs_groups(user_id, token):
+    """Whether [user_id] may create groups and add people to them."""
+    return user_id == BOT_USER or is_owner(user_id, token)
+
+
+def stays_private(room_id, token, target):
+    """Whether inviting [target] keeps the chat a conversation between two
+    people. Everyone may do that; only the owner makes anything larger."""
+    status, body = chat("GET", f"/rooms/{quote(room_id)}/members", token=token)
+    if status != 200:
+        return False
+    people = {
+        event.get("state_key")
+        for event in body.get("chunk", [])
+        if event.get("content", {}).get("membership") in ("join", "invite")
+    }
+    people.add(target)
+    return len(people) <= 2
+
+
+OWNER_ONLY = (
+    403,
+    {
+        "errcode": "M_FORBIDDEN",
+        "error": "Only the owner creates groups and adds people to them.",
+    },
+)
+
+
 def sign_up_open():
     """Direct sign-up on the chat server is only for the very first account
     (or for a shared token the owner set by hand)."""
@@ -813,14 +877,40 @@ def guard(handler, match, raw):
             isinstance(t, str) and may_contact(user_id, t) for t in invited
         ):
             return as_json(*NOT_FOUND)
-    elif match["invite"] and method == "POST" and body is not None:
-        target = body.get("user_id")
-        if isinstance(target, str) and not may_contact(user_id, target):
+        private = (
+            body.get("is_direct") is True
+            and isinstance(invited, list)
+            and len(invited) <= 1
+            and not body.get("invite_3pid")
+            and body.get("visibility", "private") == "private"
+            and body.get("preset") != "public_chat"
+            and not body.get("room_alias_name")
+        )
+        if not private and not runs_groups(user_id, token):
+            return as_json(*OWNER_ONLY)
+    elif match["create"] and method == "POST":
+        return as_json(400, {"errcode": "M_BAD_JSON", "error": "Not valid JSON."})
+    elif match["invite"] and method == "POST":
+        target = body.get("user_id") if body is not None else None
+        if not isinstance(target, str):
+            return as_json(400, {"errcode": "M_BAD_JSON", "error": "Not valid JSON."})
+        if not may_contact(user_id, target):
             return as_json(*NOT_FOUND)
+        room_id = urllib.parse.unquote(match["invite_room"])
+        if not runs_groups(user_id, token) and not stays_private(
+            room_id, token, target
+        ):
+            return as_json(*OWNER_ONLY)
     elif match["member"] and method == "PUT" and body is not None:
         target = urllib.parse.unquote(match["member"])
-        if body.get("membership") == "invite" and not may_contact(user_id, target):
-            return as_json(*NOT_FOUND)
+        if body.get("membership") == "invite":
+            if not may_contact(user_id, target):
+                return as_json(*NOT_FOUND)
+            room_id = urllib.parse.unquote(match["member_room"])
+            if not runs_groups(user_id, token) and not stays_private(
+                room_id, token, target
+            ):
+                return as_json(*OWNER_ONLY)
     elif match["keys"] and method == "POST" and body is not None:
         field = "device_keys" if match["keys"] == "query" else "one_time_keys"
         wanted = body.get(field)

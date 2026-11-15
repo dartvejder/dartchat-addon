@@ -122,6 +122,14 @@ The server enforces this, not just the app. One thing circles do not hide: if
 you put people from different circles into the same group chat, they see each
 other in that chat.
 
+## Who can make groups
+
+Only you, the owner, can create a group or add people to one. Everyone else
+can start a chat with one person inside their circle and accept the group
+invitations you send. The server enforces this, not just the app. Making a
+friend an admin of a group lets them remove people and change the group's
+name and picture, but not add anyone.
+
 ## Group rules
 
 The group bot brings the rules of a Signal link bot to Dart Chat groups. You

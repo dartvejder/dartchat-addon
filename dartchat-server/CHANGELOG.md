@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0
+
+- Link previews for the web version: a browser may not read other websites, so the web app asks the server to fetch a link's page and picture. Only signed-in people can ask, only public websites are fetched (never the home network or this server), and only pages and pictures up to 1 MB. The website sees the server's address instead of the sender's, and the server sees which links are previewed from the web. The preview still travels inside the encrypted message. The phone apps fetch previews themselves as before.
+
 ## 0.11.1
 
 - Group rules: after the server app restarted, the bot no longer knew which groups it was in. Changing a group's rules then failed with "Only a group admin can add the group bot", and the bot stayed silent in its groups until someone joined or left. It now reloads its groups on every start and asks the chat server which groups it is in.

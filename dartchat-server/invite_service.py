@@ -13,11 +13,15 @@ checks with the chat server that the token belongs to a server admin.
 Uses only the Python standard library.
 """
 
+import base64
 import http.client
+import ipaddress
 import json
 import os
 import re
 import secrets
+import socket
+import ssl
 import sys
 import threading
 import time
@@ -1648,6 +1652,116 @@ def lift_due():
 
 
 
+# Link previews for the web version. A browser may not read other websites,
+# so a signed-in person can ask the server to fetch a page (or its picture)
+# for them. Only public internet addresses are fetched, never this server,
+# the home network or anything else private, and only pages and pictures.
+FETCH_MAX_BYTES = 1024 * 1024
+FETCH_TIMEOUT = 8
+FETCH_REDIRECTS = 4
+FETCH_TYPES = ("text/html", "application/xhtml+xml")
+FETCH_AGENT = (
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0 Mobile Safari/537.36"
+)
+
+
+def public_address(host, port):
+    """The first public internet address of [host], or an error."""
+    try:
+        found = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError) as error:
+        raise ApiError(404, "DARTCHAT_FETCH_FAILED", "Unknown address.") from error
+    for family, _, _, _, address in found:
+        ip = ipaddress.ip_address(address[0].split("%")[0])
+        if ip.is_global and not ip.is_multicast:
+            return family, address
+    raise ApiError(403, "DARTCHAT_NOT_PUBLIC", "Only public websites are fetched.")
+
+
+class PinnedConnection(http.client.HTTPConnection):
+    """Connects to an address checked beforehand, so the name cannot point
+    somewhere private by the time the connection is made."""
+
+    def __init__(self, host, port, target, secure):
+        super().__init__(host, port, timeout=FETCH_TIMEOUT)
+        self.target = target
+        self.secure = secure
+
+    def connect(self):
+        family, address = self.target
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect(address)
+            if self.secure:
+                sock = ssl.create_default_context().wrap_socket(
+                    sock, server_hostname=self.host
+                )
+        except Exception:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+def fetch_link(handler, body):
+    caller(handler)
+    url = body.get("url")
+    accept = body.get("accept") or "text/html"
+    try:
+        limit = min(int(body.get("max_bytes") or FETCH_MAX_BYTES), FETCH_MAX_BYTES)
+    except (TypeError, ValueError):
+        limit = FETCH_MAX_BYTES
+    if not isinstance(url, str) or len(url) > 2048 or not isinstance(accept, str):
+        raise ApiError(400, "M_BAD_JSON", "Send the link to fetch.")
+    for _ in range(FETCH_REDIRECTS + 1):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ApiError(400, "M_BAD_JSON", "Only web links are fetched.")
+        secure = parts.scheme == "https"
+        port = parts.port or (443 if secure else 80)
+        target = public_address(parts.hostname, port)
+        connection = PinnedConnection(parts.hostname, port, target, secure)
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        try:
+            connection.request(
+                "GET",
+                path,
+                headers={
+                    "User-Agent": FETCH_AGENT,
+                    "Accept": accept[:200],
+                    "Accept-Language": "en",
+                },
+            )
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                location = response.getheader("Location")
+                if not location:
+                    break
+                url = urllib.parse.urljoin(url, location)
+                continue
+            if response.status != 200:
+                break
+            kind = (response.getheader("Content-Type") or "").split(";")[0].strip()
+            kind = kind.lower()
+            is_page = kind in FETCH_TYPES
+            if not is_page and not kind.startswith("image/"):
+                raise ApiError(415, "DARTCHAT_FETCH_TYPE", "Not a page or a picture.")
+            data = response.read(limit + 1)
+            if len(data) > limit:
+                if not is_page:
+                    raise ApiError(413, "M_TOO_LARGE", "The picture is too large.")
+                data = data[:limit]
+            return {"type": kind, "data": base64.b64encode(data).decode()}
+        except (OSError, http.client.HTTPException, ssl.SSLError) as error:
+            raise ApiError(502, "DARTCHAT_FETCH_FAILED", "Could not fetch it.") from error
+        finally:
+            connection.close()
+    raise ApiError(404, "DARTCHAT_FETCH_FAILED", "Could not fetch it.")
+
+
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
     ("POST", re.compile(r"/register"), register),
@@ -1666,6 +1780,7 @@ ROUTES = [
     ("GET", re.compile(r"/moderation"), list_moderation),
     ("POST", re.compile(r"/moderation"), create_moderation),
     ("DELETE", re.compile(r"/moderation/([0-9a-f]{16})"), cancel_moderation),
+    ("POST", re.compile(r"/fetch"), fetch_link),
 ]
 
 

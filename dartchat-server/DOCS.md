@@ -192,6 +192,12 @@ chosen time, also when the phone is switched off by then.
   read it.
 - Each account can have 50 messages waiting, up to a year ahead.
 
+## Web version and link previews
+
+The web version (https://web.dartchat.trade) talks to this server from another address, so the front door answers the browser's permission checks (CORS) for every path.
+
+A browser may not read other websites, so when someone sends a link from the web version, the app asks this server to fetch the page and its picture (`POST /_dartchat/v1/fetch`). Only signed-in people can ask; only public websites are fetched, never the home network or the server itself; only pages and pictures, at most 1 MB. The website sees this server's address, and the server sees which links are previewed from the web. Nothing is stored. The phone apps fetch previews themselves.
+
 ## Daily storage email
 
 Photos, files and messages stay on the Home Assistant disk and grow over time.

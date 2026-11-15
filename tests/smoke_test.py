@@ -267,8 +267,8 @@ def scheduled_test(owner):
     soon = expect(
         call("POST", path, {"room_id": room, "send_at": now + 4000, "content": sealed}, owner),
         200,
-        status="waiting",
     )
+    assert soon["status"] == "waiting", soon
     never = expect(
         call("POST", path, {"room_id": room, "send_at": now + 3600000, "content": sealed}, owner),
         200,

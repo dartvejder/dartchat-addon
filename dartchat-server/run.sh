@@ -10,6 +10,7 @@ SERVER_NAME="$(opt server_name)"
 REGISTRATION_TOKEN="$(opt registration_token)"
 MAX_UPLOAD_MB="$(opt max_upload_mb)"
 LOG_LEVEL="$(opt log_level)"
+FIREBASE_ACCOUNT="$(opt firebase_service_account)"
 
 if [ -z "$SERVER_NAME" ]; then
   echo "[dartchat] FATAL: set 'server_name' in the add-on configuration" >&2
@@ -62,6 +63,26 @@ else
   export CONTINUWUITY_ALLOW_REGISTRATION=false
   echo "[dartchat] Sign-up is closed (no registration token set)"
 fi
+
+# Notifications: a small gateway on this machine asks Firebase to wake phones.
+# The chat server normally refuses to call local addresses, so the block list
+# below is the default one minus this machine's own address (127.0.0.0/8).
+export CONTINUWUITY_IP_RANGE_DENYLIST='["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10","192.0.0.0/24","169.254.0.0/16","192.88.99.0/24","198.18.0.0/15","192.0.2.0/24","198.51.100.0/24","203.0.113.0/24","224.0.0.0/4","::1/128","fe80::/10","fc00::/7","2001:db8::/32","ff00::/8","fec0::/10"]'
+if [ -n "$FIREBASE_ACCOUNT" ]; then
+  (
+    export DARTCHAT_FIREBASE_ACCOUNT="$FIREBASE_ACCOUNT"
+    while true; do
+      status=0
+      python3 /push_gateway.py || status=$?
+      [ "$status" -eq 78 ] && exit 0
+      echo "[dartchat] Push gateway stopped (code $status), restarting in 5 seconds"
+      sleep 5
+    done
+  ) &
+else
+  echo "[dartchat] Notifications are off (no Firebase service account set)"
+fi
+unset FIREBASE_ACCOUNT
 
 echo "[dartchat] Starting chat server for $SERVER_NAME on port 6167"
 exec /opt/continuwuity/lib/ld-linux-x86-64.so.2 \

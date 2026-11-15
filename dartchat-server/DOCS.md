@@ -142,6 +142,10 @@ and use **Group rules** (only the server owner sees it, and you need to be an
 admin of that group). Switching any rule on adds the bot account ("Dart Bot")
 to the group; switching all of them off makes it leave.
 
+The bot's name is the `group_bot_name` option. Its picture is set in the app:
+**Group rules**, then **Bot picture**. Like every profile picture it is not
+end-to-end encrypted.
+
 | Rule | What it does |
 | --- | --- |
 | Repost check | When a link is posted again, it replies quoting the first post (`repost_reply_text`, or `self_repost_reply_text` for your own link) and adds a score line (`repost_count_text`). It knows the same Instagram, X, YouTube, TikTok, Reddit, Facebook, Bluesky and Spotify post under different addresses, ignores tracking junk and follows short links. |

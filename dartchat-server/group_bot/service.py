@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -389,9 +390,43 @@ class Service:
         await self.require_owner(request)
         joined = await self.joined_rooms()
         return {"ready": self.bot.ready, "user_id": self.user_id,
-                "name": self.settings.bot_name, "rules": describe(self.settings),
+                "name": self.settings.bot_name, "avatar_url": await self.avatar(),
+                "rules": describe(self.settings),
                 "groups": [dict(self.room_state(r, joined), name=self.room_name(r))
                            for r in self.rules.active_rooms()]}
+
+    async def avatar(self) -> str:
+        """The bot's profile picture (an mxc:// address), or "" for none."""
+        if not self.client:
+            return ""
+        status, body = await self.chat(
+            "GET", f"/profile/{quote(self.user_id)}/avatar_url", token=self.client.access_token)
+        value = body.get("avatar_url") if status == 200 else None
+        return value if isinstance(value, str) else ""
+
+    async def api_put_avatar(self, request):
+        """The owner gives the bot a profile picture they uploaded, or
+        removes it with an empty address."""
+        owner, _ = await self.require_owner(request)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        address = body.get("avatar_url") if isinstance(body, dict) else None
+        if not isinstance(address, str) or (address and not re.fullmatch(
+                r"mxc://" + re.escape(SERVER_NAME) + r"/[A-Za-z0-9_-]{1,255}", address)):
+            raise ApiError(400, "M_INVALID_PARAM", "Send a picture uploaded to this server.")
+        if not self.client:
+            raise ApiError(503, "DARTCHAT_BOT_STARTING", "The group bot is starting. "
+                           "Try again in a minute.")
+        status, answer = await self.chat(
+            "PUT", f"/profile/{quote(self.user_id)}/avatar_url", {"avatar_url": address},
+            self.client.access_token)
+        if status != 200:
+            raise ApiError(502, "DARTCHAT_AVATAR_FAILED",
+                           answer.get("error", "The picture could not be set."))
+        log.info("%s %s the bot's picture", owner, "set" if address else "removed")
+        return {"avatar_url": address}
 
     async def api_get_room(self, request):
         await self.require_owner(request)
@@ -449,6 +484,7 @@ class Service:
 
         app = web.Application(client_max_size=16384)
         app.router.add_get(f"{PREFIX}/status", wrap(self.api_status))
+        app.router.add_put(f"{PREFIX}/avatar", wrap(self.api_put_avatar))
         app.router.add_get(PREFIX + "/rooms/{room_id:" + ROOM_ID + "}", wrap(self.api_get_room))
         app.router.add_put(PREFIX + "/rooms/{room_id:" + ROOM_ID + "}", wrap(self.api_put_room))
         return app

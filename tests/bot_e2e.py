@@ -149,6 +149,25 @@ async def main():
             await until(clients, lambda: any("Lista ponavljača" in e.body
                                              for _, e in owner.notices), "the list")
 
+            # The owner, and only the owner, can give the bot a picture.
+            picture = f"mxc://{bot_id.split(':', 1)[1]}/abcDEF123"
+            status, body = await api(http, "PUT", "/avatar", friend.access_token,
+                                     {"avatar_url": picture})
+            assert status == 403, (status, body)
+            status, body = await api(http, "PUT", "/avatar", owner.access_token,
+                                     {"avatar_url": "mxc://elsewhere.example/abc"})
+            assert status == 400, (status, body)
+            status, body = await api(http, "PUT", "/avatar", owner.access_token,
+                                     {"avatar_url": picture})
+            assert status == 200, (status, body)
+            status, body = await api(http, "GET", "/status", owner.access_token)
+            assert body["avatar_url"] == picture, body
+            await until(clients, lambda: friend.rooms[room_id].avatar_url(bot_id) == picture,
+                        "the bot's picture in the group")
+            status, body = await api(http, "PUT", "/avatar", owner.access_token,
+                                     {"avatar_url": ""})
+            assert status == 200, (status, body)
+
             # After a restart the bot still knows its groups: the owner can
             # change the rules and replies are still encrypted.
             if RESTART:

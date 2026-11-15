@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.1
+
+- Group rules: the owner can give the bot a profile picture, or remove it, from the app (Group rules, "Bot picture").
+
 ## 0.12.0
 
 - Link previews for the web version: a browser may not read other websites, so the web app asks the server to fetch a link's page and picture. Only signed-in people can ask, only public websites are fetched (never the home network or this server), and only pages and pictures up to 1 MB. The website sees the server's address instead of the sender's, and the server sees which links are previewed from the web. The preview still travels inside the encrypted message. The phone apps fetch previews themselves as before.

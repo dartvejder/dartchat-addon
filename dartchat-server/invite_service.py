@@ -648,6 +648,7 @@ GUARDED = re.compile(
     r"|keys/(?P<keys>query|claim)"
     r"|(?P<login>login)"
     r"|(?P<register>register(?:/available)?)"
+    r"|rooms/(?P<send_room>[^/]+)/send/(?P<send_type>[^/]+)/[^/]+"
     r")/?"
 )
 
@@ -923,6 +924,17 @@ def guard(handler, match, raw):
             if len(allowed) != len(wanted):
                 body[field] = allowed
                 raw = json.dumps(body).encode()
+    elif match["send_room"] and method == "PUT":
+        status, data, kind = forward(handler, raw)
+        if status == 200:
+            room_id = urllib.parse.unquote(match["send_room"])
+            event_type = urllib.parse.unquote(match["send_type"])
+            threading.Thread(
+                target=count_message,
+                args=(user_id, token, room_id, event_type, body, data),
+                daemon=True,
+            ).start()
+        return status, data, kind
     elif match["search"] and method == "POST":
         status, data, kind = forward(handler, raw)
         if status != 200:
@@ -940,6 +952,140 @@ def guard(handler, match, raw):
             return as_json(200, {"results": [], "limited": False})
 
     return forward(handler, raw)
+
+
+# ---- message counts --------------------------------------------------------
+#
+# For the owner's daily storage email: how many messages were sent each day in
+# each group and, as one total, in private chats. Messages are end-to-end
+# encrypted, so only the count is kept, never anything about the content.
+# Edits are not counted; reactions are counted on their own.
+
+COUNTS_FILE = os.environ.get("DARTCHAT_MESSAGE_COUNTS", "/data/message_counts.json")
+TIMEZONE = os.environ.get("DARTCHAT_TIMEZONE", "") or "Europe/Belgrade"
+ROOM_KIND_SECONDS = 3600
+KEEP_DAILY_COUNTS_DAYS = 400
+counts_lock = threading.Lock()
+room_kinds = {}  # room id -> (is group, name, expires)
+recent_events = []  # event ids already counted (a client may send twice)
+
+
+def counts_today():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    try:
+        zone = ZoneInfo(TIMEZONE)
+    except Exception:
+        zone = ZoneInfo("Europe/Belgrade")
+    return datetime.now(zone).date()
+
+
+def message_kind(event_type, body):
+    """'message', 'reaction', or None for things that are not counted."""
+    relates = body.get("m.relates_to") if isinstance(body, dict) else None
+    relation = relates.get("rel_type") if isinstance(relates, dict) else None
+    if event_type == "m.reaction" or relation == "m.annotation":
+        return "reaction"
+    if event_type not in ("m.room.encrypted", "m.room.message", "m.sticker"):
+        return None
+    if relation == "m.replace":
+        return None  # an edit of a message already counted
+    return "message"
+
+
+def room_kind(room_id, token):
+    """(is group, name). A group has a name or more than two people."""
+    now = time.time()
+    with counts_lock:
+        cached = room_kinds.get(room_id)
+        if cached and cached[2] > now:
+            return cached[0], cached[1]
+    status, body = chat("GET", f"/rooms/{quote(room_id)}/state/m.room.name", token=token)
+    name = str(body.get("name") or "").strip() if status == 200 else ""
+    status, body = chat("GET", f"/rooms/{quote(room_id)}/joined_members", token=token)
+    people = len(body.get("joined", {})) if status == 200 else 0
+    group = bool(name) or people > 2
+    with counts_lock:
+        room_kinds[room_id] = (group, name, now + ROOM_KIND_SECONDS)
+    return group, name
+
+
+def load_counts():
+    try:
+        with open(COUNTS_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("days", {})
+    data.setdefault("rooms", {})
+    return data
+
+
+def save_counts(data):
+    tmp = COUNTS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, sort_keys=True)
+    os.replace(tmp, COUNTS_FILE)
+
+
+def fold_old_days(data, today):
+    """Days older than KEEP_DAILY_COUNTS_DAYS are merged into the first day of
+    their month, so the file stays small while monthly and yearly totals stay
+    right."""
+    from datetime import timedelta
+
+    limit = (today - timedelta(days=KEEP_DAILY_COUNTS_DAYS)).isoformat()
+    days = data["days"]
+    for day in sorted(d for d in days if d < limit and not d.endswith("-01")):
+        target = days.setdefault(day[:8] + "01", {})
+        for key, value in days.pop(day).items():
+            if isinstance(value, dict):
+                into = target.setdefault(key, {})
+                for room, n in value.items():
+                    into[room] = into.get(room, 0) + n
+            else:
+                target[key] = target.get(key, 0) + value
+
+
+def count_message(user_id, token, room_id, event_type, body, answer):
+    """Adds one sent message (or reaction) to today's counts."""
+    try:
+        if user_id == BOT_USER:
+            return
+        kind = message_kind(event_type, body)
+        if kind is None:
+            return
+        try:
+            event_id = json.loads(answer).get("event_id")
+        except (ValueError, AttributeError):
+            event_id = None
+        with counts_lock:
+            if event_id:
+                if event_id in recent_events:
+                    return
+                recent_events.append(event_id)
+                del recent_events[:-500]
+        group, name = room_kind(room_id, token)
+        today = counts_today()
+        with counts_lock:
+            data = load_counts()
+            day = data["days"].setdefault(today.isoformat(), {})
+            if kind == "reaction":
+                day["reactions"] = day.get("reactions", 0) + 1
+            elif group:
+                groups = day.setdefault("groups", {})
+                groups[room_id] = groups.get(room_id, 0) + 1
+                if name:
+                    data["rooms"][room_id] = name
+            else:
+                day["private"] = day.get("private", 0) + 1
+            fold_old_days(data, today)
+            save_counts(data)
+    except Exception as error:  # Counting must never get in the way.
+        log(f"Could not count a message: {error!r}")
 
 
 ROUTES = [

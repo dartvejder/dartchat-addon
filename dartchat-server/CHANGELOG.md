@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.0
+
+- Daily storage email: set `storage_report_email` and the server emails you every day (at `storage_report_time`, default 08:00) how much space Dart Chat uses (photos and files, database, other), how much is free on the disk, how much it grew per day, month and year, and how many messages were sent in each group and in private chats overall. See "Daily storage email" in the documentation.
+
 ## 0.7.0
 
 - The owner's phone gets a "Someone you invited has joined" notification when an invited friend creates their account. The notification names nobody; the app shows who it was under Invitations and accounts. It reaches the phones the owner has opened the invitation screen on.

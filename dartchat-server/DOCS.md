@@ -158,6 +158,22 @@ from the moment it joins. It keeps only links, headlines and counts in
 `/data/group_bot`, never message text. If you delete a message, its links stop
 counting as the first post.
 
+## Scheduled messages
+
+Someone can write a message now and have it sent later. Their phone encrypts
+the message straight away and hands it to this server, which sends it at the
+chosen time, also when the phone is switched off by then.
+
+- The server holds only the encrypted message and never sees the text.
+- To send in the sender's name, the server keeps that phone's sign-in next to
+  the waiting message, in `/data/scheduled.json`, and forgets it once the
+  message is sent or cancelled. This file is part of Home Assistant backups.
+- If the sender signs out on that phone, or leaves the chat, before the time
+  comes, the message is not sent and shows as failed in their app.
+- People or phones that join the chat after the message was written cannot
+  read it.
+- Each account can have 50 messages waiting, up to a year ahead.
+
 ## Daily storage email
 
 Photos, files and messages stay on the Home Assistant disk and grow over time.

@@ -1088,6 +1088,203 @@ def count_message(user_id, token, room_id, event_type, body, answer):
         log(f"Could not count a message: {error!r}")
 
 
+# ---- scheduled messages ----------------------------------------------------
+#
+# A phone can hand over a message to be sent later. The phone encrypts it
+# first, so what waits here is ciphertext: the server never sees the text.
+# To send it at the right time in the sender's name, the sender's sign-in
+# for that phone is kept next to it until the message has gone out.
+
+SCHEDULE_FILE = os.environ.get("DARTCHAT_SCHEDULE_STORE", "/data/scheduled.json")
+SCHEDULE_MAX_PER_USER = 50
+SCHEDULE_MAX_AHEAD_MS = 366 * 24 * 3600 * 1000
+SCHEDULE_GIVE_UP_SECONDS = 6 * 3600
+SCHEDULE_KEEP_FAILED_SECONDS = 7 * 24 * 3600
+
+schedule_lock = threading.Lock()
+schedule = None  # list of entries, loaded on first use
+
+
+def load_schedule():
+    global schedule
+    if schedule is None:
+        schedule = []
+        try:
+            with open(SCHEDULE_FILE, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, list):
+                schedule = loaded
+        except (OSError, ValueError):
+            pass
+    return schedule
+
+
+def save_schedule():
+    temporary = f"{SCHEDULE_FILE}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(schedule, handle)
+    os.replace(temporary, SCHEDULE_FILE)
+
+
+def public_scheduled(entry):
+    return {
+        "id": entry["id"],
+        "room_id": entry["room_id"],
+        "send_at": entry["send_at"],
+        "status": entry["status"],
+    }
+
+
+def list_scheduled(handler, body):
+    user_id, _ = caller(handler)
+    with schedule_lock:
+        mine = [public_scheduled(e) for e in load_schedule() if e["user_id"] == user_id]
+    return {"scheduled": sorted(mine, key=lambda e: e["send_at"])}
+
+
+def create_scheduled(handler, body):
+    user_id, token = caller(handler)
+    room_id = body.get("room_id")
+    content = body.get("content")
+    send_at = body.get("send_at")
+    now_ms = int(time.time() * 1000)
+    if not isinstance(room_id, str) or not room_id.startswith("!"):
+        raise ApiError(400, "M_INVALID_PARAM", "room_id is missing.")
+    if isinstance(send_at, bool) or not isinstance(send_at, int):
+        raise ApiError(400, "M_INVALID_PARAM", "send_at must be a time in milliseconds.")
+    if send_at > now_ms + SCHEDULE_MAX_AHEAD_MS:
+        raise ApiError(400, "M_INVALID_PARAM", "That is too far in the future.")
+    # Only encrypted messages wait here; the text never reaches the server.
+    if (
+        not isinstance(content, dict)
+        or content.get("algorithm") != "m.megolm.v1.aes-sha2"
+        or not isinstance(content.get("ciphertext"), str)
+        or not isinstance(content.get("session_id"), str)
+    ):
+        raise ApiError(400, "DARTCHAT_NOT_ENCRYPTED", "Only encrypted messages can be scheduled.")
+    status, joined = chat("GET", "/joined_rooms", token=token)
+    if status != 200 or room_id not in joined.get("joined_rooms", []):
+        raise ApiError(403, "M_FORBIDDEN", "You are not in that chat.")
+    entry = {
+        "id": secrets.token_hex(8),
+        "user_id": user_id,
+        "token": token,
+        "room_id": room_id,
+        "content": content,
+        "send_at": send_at,
+        "status": "waiting",
+        "created": int(time.time()),
+    }
+    with schedule_lock:
+        waiting = [
+            e for e in load_schedule()
+            if e["user_id"] == user_id and e["status"] == "waiting"
+        ]
+        if len(waiting) >= SCHEDULE_MAX_PER_USER:
+            raise ApiError(
+                429, "M_LIMIT_EXCEEDED", "Too many scheduled messages. Cancel one first."
+            )
+        schedule.append(entry)
+        save_schedule()
+    return public_scheduled(entry)
+
+
+def cancel_scheduled(handler, body, entry_id):
+    user_id, _ = caller(handler)
+    with schedule_lock:
+        for entry in load_schedule():
+            if entry["id"] == entry_id and entry["user_id"] == user_id:
+                if entry["status"] == "sending":
+                    raise ApiError(409, "DARTCHAT_SENDING", "It is being sent right now.")
+                schedule.remove(entry)
+                save_schedule()
+                return {}
+    raise ApiError(404, "M_NOT_FOUND", "No such scheduled message.")
+
+
+def send_due_messages():
+    """Sends what is due. Returns how many were sent."""
+    now = time.time()
+    with schedule_lock:
+        due = [
+            e for e in load_schedule()
+            if e["status"] == "waiting" and e["send_at"] <= now * 1000
+            and e.get("retry_at", 0) <= now
+        ]
+        for entry in due:
+            entry["status"] = "sending"
+        # Failed ones are shown to their sender for a week, then forgotten.
+        before = len(schedule)
+        schedule[:] = [
+            e for e in schedule
+            if e["status"] != "failed"
+            or e.get("failed_at", now) > now - SCHEDULE_KEEP_FAILED_SECONDS
+        ]
+        if due or len(schedule) != before:
+            save_schedule()
+    sent = 0
+    for entry in due:
+        try:
+            status, answer = chat(
+                "PUT",
+                f"/rooms/{quote(entry['room_id'])}/send/m.room.encrypted/"
+                f"dartchat-scheduled-{entry['id']}",
+                entry["content"],
+                entry["token"],
+            )
+        except ApiError:
+            status, answer = 502, {}
+        with schedule_lock:
+            if entry not in schedule:
+                continue
+            if status == 200:
+                schedule.remove(entry)
+                sent += 1
+            elif status in (401, 403, 404) or (
+                now - entry["send_at"] / 1000 > SCHEDULE_GIVE_UP_SECONDS
+            ):
+                # Signed out on that phone, removed from the chat, or the
+                # chat server stayed down for hours.
+                entry["status"] = "failed"
+                entry["failed_at"] = int(now)
+                entry.pop("token", None)
+                entry.pop("content", None)
+            else:
+                entry["status"] = "waiting"
+                entry["retry_at"] = int(now) + 30
+            save_schedule()
+        if status == 200:
+            threading.Thread(
+                target=count_message,
+                args=(
+                    entry["user_id"], entry["token"], entry["room_id"],
+                    "m.room.encrypted", entry["content"], json.dumps(answer),
+                ),
+                daemon=True,
+            ).start()
+    return sent
+
+
+def schedule_loop():
+    with schedule_lock:
+        # Anything caught mid-send by a restart goes out again; the fixed
+        # transaction name keeps the chat server from sending it twice.
+        changed = False
+        for entry in load_schedule():
+            if entry["status"] == "sending":
+                entry["status"] = "waiting"
+                changed = True
+        if changed:
+            save_schedule()
+    while True:
+        try:
+            send_due_messages()
+        except Exception as error:  # Keep the clock running whatever happens.
+            log(f"Could not send scheduled messages: {error!r}")
+        time.sleep(5)
+
+
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
     ("POST", re.compile(r"/register"), register),
@@ -1100,6 +1297,9 @@ ROUTES = [
     ("POST", re.compile(r"/admin/circles"), create_circle),
     ("PUT", re.compile(r"/admin/circles/([0-9a-f]{16})"), update_circle),
     ("DELETE", re.compile(r"/admin/circles/([0-9a-f]{16})"), delete_circle),
+    ("GET", re.compile(r"/scheduled"), list_scheduled),
+    ("POST", re.compile(r"/scheduled"), create_scheduled),
+    ("DELETE", re.compile(r"/scheduled/([0-9a-f]{16})"), cancel_scheduled),
 ]
 
 
@@ -1137,7 +1337,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             guarded = GUARDED.fullmatch(urllib.parse.unquote(path))
             length = int(self.headers.get("Content-Length") or 0)
-            if length > (2 * 1024 * 1024 if guarded else 16384):
+            if length > (
+                2 * 1024 * 1024 if guarded
+                else 256 * 1024 if path == PREFIX + "/scheduled"
+                else 16384
+            ):
                 self.close_connection = True
                 raise ApiError(413, "M_TOO_LARGE", "Request too large.")
             raw = self.rfile.read(length) if length else b""
@@ -1187,6 +1391,7 @@ def main():
     store = Store(STORE)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
+    threading.Thread(target=schedule_loop, daemon=True).start()
     if RESEND_KEY:
         log(f"Ready. Invitation emails are sent from {EMAIL_FROM or default_sender()}")
     else:

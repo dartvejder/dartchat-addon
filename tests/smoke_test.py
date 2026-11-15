@@ -242,6 +242,60 @@ def circles_test(owner, join):
     expect(call("GET", "/_matrix/federation/v1/version"), 404)
 
 
+def scheduled_test(owner):
+    """A message handed over encrypted is sent later in the sender's name."""
+    path = INVITE + "/scheduled"
+    room = expect(
+        call("POST", MATRIX + "/createRoom", {"name": "Later"}, owner), 200
+    )["room_id"]
+    now = int(time.time() * 1000)
+    sealed = {
+        "algorithm": "m.megolm.v1.aes-sha2",
+        "ciphertext": "not-really-encrypted-but-shaped-like-it",
+        "session_id": "session",
+    }
+    expect(call("GET", path), 401)
+    expect(call("GET", path, token=owner), 200, scheduled=[])
+    # Text that is not encrypted is refused: the server must never hold it.
+    plain = {"room_id": room, "send_at": now, "content": {"msgtype": "m.text", "body": "hi"}}
+    expect(call("POST", path, plain, owner), 400, errcode="DARTCHAT_NOT_ENCRYPTED")
+    expect(
+        call("POST", path, {"room_id": "!nope:chat.test", "send_at": now, "content": sealed}, owner),
+        403,
+    )
+    expect(call("POST", path, {"room_id": room, "send_at": "soon", "content": sealed}, owner), 400)
+    soon = expect(
+        call("POST", path, {"room_id": room, "send_at": now + 4000, "content": sealed}, owner),
+        200,
+    )
+    assert soon["status"] == "waiting", soon
+    never = expect(
+        call("POST", path, {"room_id": room, "send_at": now + 3600000, "content": sealed}, owner),
+        200,
+    )
+    listed = expect(call("GET", path, token=owner), 200)["scheduled"]
+    assert [e["id"] for e in listed] == [soon["id"], never["id"]], listed
+    assert "token" not in listed[0] and "content" not in listed[0], listed
+    expect(call("DELETE", f"{path}/{never['id']}", token=owner), 200)
+    expect(call("DELETE", f"{path}/{never['id']}", token=owner), 404)
+
+    def sent():
+        chunk = expect(
+            call("GET", f"{MATRIX}/rooms/{room}/messages?dir=b&limit=10", token=owner), 200
+        )["chunk"]
+        return [e for e in chunk if e["type"] == "m.room.encrypted"]
+
+    assert sent() == [], "sent before its time"
+    for _ in range(30):
+        if sent():
+            break
+        time.sleep(1)
+    events = sent()
+    assert len(events) == 1 and events[0]["sender"] == "@boss:chat.test", events
+    assert events[0]["content"]["ciphertext"] == sealed["ciphertext"], events
+    expect(call("GET", path, token=owner), 200, scheduled=[])
+
+
 def main():
     server = HTTPServer(("127.0.0.1", 6190), FakeResend)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -307,6 +361,7 @@ def main():
     expect(login("ana", "ana-password-1"), 403, errcode="M_USER_DEACTIVATED")
 
     circles_test(owner, join)
+    scheduled_test(owner)
 
     # A friend for the group bot test (tests/bot_e2e.py), which runs next.
     lena = expect(

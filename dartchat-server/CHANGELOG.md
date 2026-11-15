@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.0
+
+- Scheduled messages: a phone can hand over a message to be sent later, at a time the sender chose. The phone encrypts it first, so the server holds only ciphertext and never sees the text. The server sends it at the right time even if the phone is off. The sender can list and cancel what is waiting.
+
 ## 0.8.2
 
 - The storage email always shows the Messages section, with zeros and the day counting began while nothing has been counted yet.

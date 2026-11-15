@@ -14,6 +14,9 @@ FIREBASE_ACCOUNT="$(opt firebase_service_account)"
 RESEND_KEY="$(opt resend_api_key)"
 INVITE_FROM="$(opt invite_email_from)"
 APP_LINK="$(opt app_link)"
+TIMEZONE="$(opt timezone)"
+REPORT_EMAIL="$(opt storage_report_email)"
+REPORT_TIME="$(opt storage_report_time)"
 
 if [ -z "$SERVER_NAME" ]; then
   echo "[dartchat] FATAL: set 'server_name' in the add-on configuration" >&2
@@ -103,7 +106,19 @@ keep_running() {
   export DARTCHAT_RESEND_KEY="$RESEND_KEY"
   export DARTCHAT_INVITE_FROM="$INVITE_FROM"
   export DARTCHAT_APP_LINK="$APP_LINK"
+  export DARTCHAT_TIMEZONE="$TIMEZONE"
   keep_running "Invitation service" python3 /invite_service.py
+) &
+# Daily storage email: how much space the chat uses, how fast it grows, and
+# how many messages were sent, mailed to the owner once a day.
+(
+  export DARTCHAT_SERVER_NAME="$SERVER_NAME"
+  export DARTCHAT_RESEND_KEY="$RESEND_KEY"
+  export DARTCHAT_INVITE_FROM="$INVITE_FROM"
+  export DARTCHAT_TIMEZONE="$TIMEZONE"
+  export DARTCHAT_STORAGE_REPORT_EMAIL="$REPORT_EMAIL"
+  export DARTCHAT_STORAGE_REPORT_TIME="$REPORT_TIME"
+  keep_running "Storage report" python3 /storage_report.py
 ) &
 # Group rules: a bot account that applies the owner's rules (repost check
 # and the rest) in the groups the owner switches on in the app.
@@ -142,7 +157,7 @@ http {
     }
     # Requests that could reveal or contact another account are checked
     # against the owner's circles before they reach the chat server.
-    location ~ ^/_matrix/client/[^/]+/([^/]+/)?(user_directory/search|profile/|presence/|createRoom|rooms/[^/]+/invite|rooms/[^/]+/state/m\\.room\\.member/|keys/query|keys/claim|login|register) {
+    location ~ ^/_matrix/client/[^/]+/([^/]+/)?(user_directory/search|profile/|presence/|createRoom|rooms/[^/]+/invite|rooms/[^/]+/state/m\\.room\\.member/|keys/query|keys/claim|login|register|rooms/[^/]+/send/) {
       proxy_pass http://127.0.0.1:6168;
       proxy_read_timeout 120s;
     }

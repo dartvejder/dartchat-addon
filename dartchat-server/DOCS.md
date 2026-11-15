@@ -16,6 +16,8 @@ content.
 | `app_link` | Optional link, put in invitation emails, to where friends install the app. |
 | `max_upload_mb` | Largest photo or file upload, in megabytes. Default 20. |
 | `log_level` | How much the server logs: `error`, `warn`, `info` or `debug`. |
+| `storage_report_email` | Where to send the daily storage email. Empty turns the email off. Needs `resend_api_key`. |
+| `storage_report_time` | When the daily storage email goes out, like `08:00`, in the `timezone` option's time zone (default Europe/Belgrade). |
 
 **Choose `server_name` carefully.** It becomes part of every account name
 (`@anna:chat.example.com`) and cannot be changed later. The add-on refuses to
@@ -155,3 +157,26 @@ Messages are end-to-end encrypted, so the bot reads a group as a member of it,
 from the moment it joins. It keeps only links, headlines and counts in
 `/data/group_bot`, never message text. If you delete a message, its links stop
 counting as the first post.
+
+## Daily storage email
+
+Photos, files and messages stay on the Home Assistant disk and grow over time.
+Set `storage_report_email` and the server emails you once a day, at
+`storage_report_time`, with:
+
+- how much space Dart Chat uses, split into photos and files, the message
+  database, and the rest of its data;
+- how much free space is left on the disk, and roughly when it would be full
+  at the current pace;
+- how much it grew over the last day, 7 days, 30 days and 12 months, and per
+  day, per month and per year;
+- how many messages were sent yesterday, this month, this year and since
+  counting began: each group by name, and private chats as one total (nobody's
+  private chats are listed by person). Reactions are counted on their own,
+  edits are not counted, and Dart Bot's posts are left out.
+
+The first email is sent right after the add-on starts with the option set.
+Sizes are measured once a day and kept in `/data/storage_history.json`, so the
+growth figures fill in as days go by. Messages are counted from the moment
+this version is installed, in `/data/message_counts.json`; the server only
+counts them and never sees what they say.

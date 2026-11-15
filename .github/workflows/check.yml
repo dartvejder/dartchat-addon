@@ -23,7 +23,7 @@ jobs:
       - name: Unit tests for the group bot
         run: |
           python3 -m pip install -q -r dartchat-server/group_bot/requirements.txt pytest
-          python3 -m pytest -q tests/test_group_bot.py tests/test_group_bot_links.py tests/test_push_gateway.py tests/test_joined_notice.py
+          python3 -m pytest -q tests/test_group_bot.py tests/test_group_bot_links.py tests/test_push_gateway.py tests/test_joined_notice.py tests/test_storage_report.py
 
       - name: Build the add-on image
         run: docker build -t dartchat-server:ci dartchat-server

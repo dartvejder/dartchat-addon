@@ -35,6 +35,7 @@ from nio import (
 )
 
 from .core import Bot, Message
+from . import moderation
 from .ha import HASensors
 from .rules import RULES, RoomRules, Settings, describe
 from .store import Store
@@ -48,6 +49,7 @@ REGISTRATION_TOKEN = os.environ.get("DARTCHAT_REGISTRATION_TOKEN", "")
 OPTIONS = os.environ.get("DARTCHAT_OPTIONS", "/data/options.json")
 DATA = os.environ.get("DARTCHAT_BOT_DIR", "/data/group_bot")
 PORT = int(os.environ.get("DARTCHAT_BOT_PORT", "6169"))
+SERVICE = f"http://127.0.0.1:{os.environ.get('DARTCHAT_INVITE_PORT', '6168')}/_dartchat/v1"
 USERNAME = "dartbot"
 ROOM_ID = r"![A-Za-z0-9._~=+/-]+(?::[A-Za-z0-9.-]+(?::[0-9]+)?)?"
 
@@ -173,9 +175,75 @@ class Service:
             is_media=not isinstance(event, RoomMessageText),
         )
         try:
+            if not message.is_media and await self.moderate(room, message):
+                return
             await self.bot.handle(message)
         except Exception:
             log.exception("error handling a message")
+
+    # -- the owner's ban and mute commands ---------------------------------------
+    async def service(self, method, path, body=None):
+        try:
+            async with self.http.request(
+                method, f"{SERVICE}{path}", json=body or {},
+                headers={"Authorization": f"Bearer {self.client.access_token}"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                try:
+                    data = await resp.json(content_type=None)
+                except ValueError:
+                    data = {}
+                return resp.status, data if isinstance(data, dict) else {}
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return 502, {}
+
+    async def moderate(self, room, message) -> bool:
+        """Handles "!ban @name 1d" and friends. True when the message was one."""
+        command = moderation.parse_command(message.body)
+        if command is None:
+            return False
+        room_id, reply = message.room_id, message.event_id
+        if command == "help":
+            await self.send(room_id, moderation.HELP, reply)
+            return True
+        kind, start, name, minutes = command
+        asked = {"requested_by": message.sender}
+        if start:
+            people = {user_id: user.display_name or ""
+                      for user_id, user in room.users.items()}
+            target = moderation.find_person(name, people)
+            if target is None:
+                await self.send(room_id, f"Ne mogu da nađem „{name}” u ovoj grupi.", reply)
+                return True
+            status, answer = await self.service("POST", "/moderation", {
+                **asked, "room_id": room_id, "user_id": target, "kind": kind,
+                "minutes": minutes})
+            shown = people.get(target) or target[1:].split(":")[0]
+        else:
+            status, answer = await self.service("GET", "/moderation")
+            entries = [e for e in answer.get("all", [])
+                       if e.get("room_id") == room_id and e.get("kind") == kind]
+            target = moderation.find_person(
+                name, {e["user_id"]: room.user_name(e["user_id"]) or "" for e in entries})
+            if status == 200 and target is None:
+                await self.send(room_id, f"„{name}” nema {'zabranu' if kind == 'ban' else 'mute'} "
+                                "u ovoj grupi.", reply)
+                return True
+            if status == 200:
+                entry = next(e for e in entries if e["user_id"] == target)
+                status, answer = await self.service(
+                    "DELETE", f"/moderation/{entry['id']}", asked)
+            shown = room.user_name(target) if target else name
+            shown = shown or (target[1:].split(":")[0] if target else name)
+        if status == 200:
+            text = moderation.done_text(kind, start, shown, answer.get("until"),
+                                        self.settings.tz)
+        elif status == 403 and answer.get("errcode") == "M_FORBIDDEN":
+            text = "Samo vlasnik može to da uradi."
+        else:
+            text = answer.get("error") or "Nije uspelo. Probaj ponovo."
+        await self.send(room_id, text, reply)
+        return True
 
     async def on_undecryptable(self, room, event) -> None:
         if self.catching_up or not self.rules.active(room.room_id):

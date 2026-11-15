@@ -863,6 +863,7 @@ def guard(handler, match, raw):
     if method == "OPTIONS":
         return forward(handler, raw)
     user_id, token = caller(handler)
+    remember_owner_session(user_id, token)
 
     if match["profile"] and method == "GET":
         target = urllib.parse.unquote(match["profile"])
@@ -925,6 +926,16 @@ def guard(handler, match, raw):
                 body[field] = allowed
                 raw = json.dumps(body).encode()
     elif match["send_room"] and method == "PUT":
+        until = muted_until(user_id, urllib.parse.unquote(match["send_room"]))
+        if until:
+            return as_json(
+                403,
+                {
+                    "errcode": "DARTCHAT_MUTED",
+                    "error": f"You are muted in this group until {describe_until(until)}.",
+                    "until": until,
+                },
+            )
         status, data, kind = forward(handler, raw)
         if status == 200:
             room_id = urllib.parse.unquote(match["send_room"])
@@ -1225,6 +1236,13 @@ def send_due_messages():
             save_schedule()
     sent = 0
     for entry in due:
+        if muted_until(entry["user_id"], entry["room_id"]):
+            # A muted person's message waits until the mute is over.
+            with schedule_lock:
+                entry["status"] = "waiting"
+                entry["retry_at"] = int(now) + 60
+                save_schedule()
+            continue
         try:
             status, answer = chat(
                 "PUT",
@@ -1282,7 +1300,296 @@ def schedule_loop():
             send_due_messages()
         except Exception as error:  # Keep the clock running whatever happens.
             log(f"Could not send scheduled messages: {error!r}")
+        try:
+            lift_due()
+        except Exception as error:
+            log(f"Could not lift a ban: {error!r}")
         time.sleep(5)
+
+
+# ---- timed bans and mutes ----------------------------------------------------
+#
+# Only the owner (and the group bot, when the owner tells it to) can ban or
+# mute someone in a group for a while. A mute is kept here: while it lasts,
+# the front door refuses that person's messages in that group. A ban is a
+# real ban on the chat server; when its time is up this service lifts it and
+# invites the person back, using the owner's most recent sign-in.
+
+MODERATION_FILE = os.environ.get("DARTCHAT_MODERATION_STORE", "/data/moderation.json")
+MODERATION_MAX_MINUTES = 366 * 24 * 60
+# A minute, in milliseconds. Tests make it shorter.
+MODERATION_MINUTE_MS = int(os.environ.get("DARTCHAT_MODERATION_MINUTE_MS", "60000"))
+MODERATION_KEEP_FAILED_SECONDS = 7 * 24 * 3600
+
+moderation_lock = threading.Lock()
+moderation = None  # {"entries": [...], "owner": {"user_id", "token"}}
+
+
+def load_moderation():
+    global moderation
+    if moderation is None:
+        moderation = {"entries": [], "owner": None}
+        try:
+            with open(MODERATION_FILE, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict) and isinstance(loaded.get("entries"), list):
+                moderation["entries"] = loaded["entries"]
+                if isinstance(loaded.get("owner"), dict):
+                    moderation["owner"] = loaded["owner"]
+        except (OSError, ValueError):
+            pass
+    return moderation
+
+
+def save_moderation():
+    temporary = f"{MODERATION_FILE}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(moderation, handle)
+    os.replace(temporary, MODERATION_FILE)
+
+
+def remember_owner_session(user_id, token):
+    """Keeps the owner's latest sign-in, so a ban can be lifted on time while
+    the owner's phone is off. Never leaves this machine."""
+    with store.lock:
+        if user_id not in store.data["owners"]:
+            return
+    with moderation_lock:
+        data = load_moderation()
+        if data["owner"] != {"user_id": user_id, "token": token}:
+            data["owner"] = {"user_id": user_id, "token": token}
+            save_moderation()
+
+
+def muted_until(user_id, room_id):
+    """When [user_id]'s mute in [room_id] ends (ms), or None."""
+    now = time.time() * 1000
+    with moderation_lock:
+        for entry in load_moderation()["entries"]:
+            if (
+                entry["kind"] == "mute"
+                and entry["status"] == "active"
+                and entry["user_id"] == user_id
+                and entry["room_id"] == room_id
+                and entry["until"] > now
+            ):
+                return entry["until"]
+    return None
+
+
+def describe_until(until_ms):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    try:
+        zone = ZoneInfo(TIMEZONE)
+    except Exception:
+        zone = ZoneInfo("Europe/Belgrade")
+    local = datetime.fromtimestamp(until_ms / 1000, tz=zone)
+    return f"{local.day} {local.strftime('%b %H:%M')}"
+
+
+def public_moderation(entry, full):
+    result = {
+        "id": entry["id"],
+        "kind": entry["kind"],
+        "room_id": entry["room_id"],
+        "room_name": entry.get("room_name", ""),
+        "until": entry["until"],
+        "status": entry["status"],
+    }
+    if full:
+        result["user_id"] = entry["user_id"]
+    return result
+
+
+def list_moderation(handler, body):
+    """Everyone sees what applies to themselves; the owner sees everything."""
+    user_id, token = caller(handler)
+    # The group bot sees everything too, to lift what the owner asks it to.
+    owner = user_id == BOT_USER or is_owner(user_id, token)
+    with moderation_lock:
+        entries = list(load_moderation()["entries"])
+    answer = {
+        "mine": [
+            public_moderation(e, False)
+            for e in entries
+            if e["user_id"] == user_id
+            and e["status"] == "active"
+            and (e["kind"] == "ban" or e["until"] > time.time() * 1000)
+        ]
+    }
+    if owner:
+        answer["all"] = [public_moderation(e, True) for e in entries]
+    return answer
+
+
+def moderator(handler, body):
+    """The owner's (user id, token) for a ban or mute, or an error. The
+    group bot may ask on the owner's behalf, naming who told it to."""
+    user_id, token = caller(handler)
+    if user_id == BOT_USER:
+        asked_by = body.get("requested_by")
+        with store.lock:
+            known = isinstance(asked_by, str) and asked_by in store.data["owners"]
+        if not known:
+            raise ApiError(403, "M_FORBIDDEN", "Only the owner can do this.")
+        with moderation_lock:
+            session = load_moderation()["owner"]
+        if not session:
+            raise ApiError(
+                409, "DARTCHAT_OWNER_AWAY",
+                "The owner needs to open the app once before the bot can do this.",
+            )
+        return session["user_id"], session["token"]
+    if not is_owner(user_id, token):
+        raise ApiError(403, "M_FORBIDDEN", "Only the owner can do this.")
+    remember_owner_session(user_id, token)
+    return user_id, token
+
+
+def create_moderation(handler, body):
+    owner, token = moderator(handler, body)
+    room_id = body.get("room_id")
+    target = body.get("user_id")
+    kind = body.get("kind")
+    minutes = body.get("minutes")
+    if (
+        not isinstance(room_id, str)
+        or not isinstance(target, str)
+        or kind not in ("ban", "mute")
+        or isinstance(minutes, bool)
+        or not isinstance(minutes, int)
+        or not 1 <= minutes <= MODERATION_MAX_MINUTES
+    ):
+        raise ApiError(400, "M_BAD_JSON", "Say who, where, ban or mute, and for how long.")
+    with store.lock:
+        protected = target == BOT_USER or target in store.data["owners"]
+    if protected:
+        raise ApiError(400, "DARTCHAT_PROTECTED", "The owner and the bot cannot be banned or muted.")
+    status, members = chat("GET", f"/rooms/{quote(room_id)}/members", token=token)
+    if status != 200:
+        raise ApiError(403, "M_FORBIDDEN", "You are not in that group.")
+    people = {
+        e.get("state_key"): e.get("content", {}).get("membership")
+        for e in members.get("chunk", [])
+    }
+    if people.get(target) not in ("join", "invite"):
+        raise ApiError(404, "M_NOT_FOUND", "That person is not in the group.")
+    is_group, room_name = room_kind(room_id, token)
+    if not is_group:
+        raise ApiError(400, "DARTCHAT_NOT_A_GROUP", "This only works in groups.")
+    until = int(time.time() * 1000) + minutes * MODERATION_MINUTE_MS
+    entry = {
+        "id": secrets.token_hex(8),
+        "kind": kind,
+        "room_id": room_id,
+        "room_name": room_name,
+        "user_id": target,
+        "until": until,
+        "by": owner,
+        "status": "active",
+    }
+    if kind == "ban":
+        status, answer = chat(
+            "POST",
+            f"/rooms/{quote(room_id)}/ban",
+            {"user_id": target, "reason": f"Until {describe_until(until)}"},
+            token,
+        )
+        if status != 200:
+            raise ApiError(
+                403, "DARTCHAT_CANNOT_BAN",
+                answer.get("error") or "The owner is not an admin of that group.",
+            )
+    with moderation_lock:
+        data = load_moderation()
+        # A new ban or mute replaces an earlier one of the same kind.
+        data["entries"][:] = [
+            e for e in data["entries"]
+            if not (
+                e["kind"] == kind and e["room_id"] == room_id and e["user_id"] == target
+            )
+        ]
+        data["entries"].append(entry)
+        save_moderation()
+    return public_moderation(entry, True)
+
+
+def lift(entry, token):
+    """Ends a ban: the person is unbanned and invited back. True when done."""
+    room = quote(entry["room_id"])
+    status, answer = chat(
+        "POST", f"/rooms/{room}/unban", {"user_id": entry["user_id"]}, token
+    )
+    if status in (401, 429) or status >= 500:
+        return False
+    # Already unbanned by hand is fine. Then back in, if they are not already.
+    chat("POST", f"/rooms/{room}/invite", {"user_id": entry["user_id"]}, token)
+    return True
+
+
+def cancel_moderation(handler, body, entry_id):
+    _, token = moderator(handler, body)
+    with moderation_lock:
+        entry = next(
+            (e for e in load_moderation()["entries"] if e["id"] == entry_id), None
+        )
+    if entry is None:
+        raise ApiError(404, "M_NOT_FOUND", "No such ban or mute.")
+    if entry["kind"] == "ban" and not lift(entry, token):
+        raise ApiError(502, "DARTCHAT_LIFT_FAILED", "The ban could not be lifted. Try again.")
+    with moderation_lock:
+        if entry in moderation["entries"]:
+            moderation["entries"].remove(entry)
+            save_moderation()
+    return {}
+
+
+def lift_due():
+    """Ends what has run out. Mutes just stop; bans are lifted."""
+    now = time.time()
+    with moderation_lock:
+        data = load_moderation()
+        session = data["owner"]
+        due = [
+            e for e in data["entries"]
+            if e["status"] == "active" and e["until"] <= now * 1000
+            and e.get("retry_at", 0) <= now
+        ]
+        before = len(data["entries"])
+        data["entries"][:] = [
+            e for e in data["entries"]
+            if not (e in due and e["kind"] == "mute")
+            and not (
+                e["status"] == "failed"
+                and e.get("failed_at", now) < now - MODERATION_KEEP_FAILED_SECONDS
+            )
+        ]
+        if len(data["entries"]) != before:
+            save_moderation()
+    for entry in due:
+        if entry["kind"] != "ban":
+            continue
+        try:
+            done = bool(session) and lift(entry, session["token"])
+        except ApiError:
+            done = False
+        with moderation_lock:
+            if entry not in moderation["entries"]:
+                continue
+            if done:
+                moderation["entries"].remove(entry)
+            elif now * 1000 - entry["until"] > SCHEDULE_GIVE_UP_SECONDS * 1000:
+                # The owner signed out everywhere: the ban stays until the
+                # owner lifts it by hand.
+                entry["status"] = "failed"
+                entry["failed_at"] = int(now)
+            else:
+                entry["retry_at"] = int(now) + 60
+            save_moderation()
+
 
 
 ROUTES = [
@@ -1300,6 +1607,9 @@ ROUTES = [
     ("GET", re.compile(r"/scheduled"), list_scheduled),
     ("POST", re.compile(r"/scheduled"), create_scheduled),
     ("DELETE", re.compile(r"/scheduled/([0-9a-f]{16})"), cancel_scheduled),
+    ("GET", re.compile(r"/moderation"), list_moderation),
+    ("POST", re.compile(r"/moderation"), create_moderation),
+    ("DELETE", re.compile(r"/moderation/([0-9a-f]{16})"), cancel_moderation),
 ]
 
 

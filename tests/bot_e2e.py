@@ -140,6 +140,24 @@ async def main():
             await until(clients, lambda: any("Lista ponavljača" in e.body
                                              for _, e in owner.notices), "the list")
 
+            # Only the owner's ban and mute commands count.
+            def said(text):
+                return any(text in e.body for r, e in owner.notices if r == room_id)
+
+            await send(friend, room_id, f"!mute @{OWNER} 1h")
+            await until(clients, lambda: said("Samo vlasnik"), "the refusal")
+            await send(owner, room_id, "!mute nobody 1h")
+            await until(clients, lambda: said("Ne mogu da nađem"), "the unknown name")
+            await send(owner, room_id, f"!mute @{FRIEND} 2h")
+            await until(clients, lambda: said("ne može da piše"), "the mute")
+            refused = await friend.room_send(
+                room_id, "m.room.message", {"msgtype": "m.text", "body": "psst"},
+                ignore_unverified_devices=True)
+            assert not getattr(refused, "event_id", None), refused
+            await send(owner, room_id, f"!unmute {FRIEND}")
+            await until(clients, lambda: said("ponovo može da piše"), "the unmute")
+            await send(friend, room_id, "hvala")
+
             status, body = await api(http, "PUT", path, owner.access_token,
                                      {"rules": {r: False for r in ALL_RULES}})
             assert status == 200 and not any(body["rules"].values()), body

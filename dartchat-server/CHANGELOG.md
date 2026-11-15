@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- Timed bans and mutes in groups, for the owner only. A ban removes someone from a group for a chosen time; the server lifts it by itself and invites the person back. A mute leaves them in the group, able to read but not to write, until the time is up. Group admins and members cannot use either.
+- The group bot takes the owner's commands `!ban @name 1d`, `!mute @name 2h`, `!unban @name` and `!unmute @name` (m, h, d or w for the length) in groups where it is switched on. From anyone else they are refused.
+- A banned or muted person's app can ask when it ends.
+
 ## 0.9.0
 
 - Scheduled messages: a phone can hand over a message to be sent later, at a time the sender chose. The phone encrypts it first, so the server holds only ciphertext and never sees the text. The server sends it at the right time even if the phone is off. The sender can list and cancel what is waiting.

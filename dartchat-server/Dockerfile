@@ -5,7 +5,7 @@ FROM jadedblueeyes/continuwuity:v26.9.4 AS server
 
 FROM alpine:3.22
 
-RUN apk add --no-cache jq ca-certificates
+RUN apk add --no-cache jq ca-certificates python3 openssl
 
 # Keep the server's own loader and libraries together in one folder so they
 # never mix with Alpine's.
@@ -14,6 +14,7 @@ COPY --from=server /lib64/ld-linux-x86-64.so.2 /opt/continuwuity/lib/
 COPY --from=server /usr/lib/ /opt/continuwuity/lib/
 
 COPY run.sh /run.sh
+COPY push_gateway.py /push_gateway.py
 RUN chmod 0755 /run.sh
 
 EXPOSE 6167

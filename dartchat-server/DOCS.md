@@ -10,6 +10,7 @@ content.
 | --- | --- |
 | `server_name` | The address friends connect to, for example `chat.example.com`. Required. |
 | `registration_token` | A secret that lets someone create an account. Leave empty to close sign-up. |
+| `firebase_service_account` | Turns on phone notifications. Paste the whole contents of the Firebase service account key file (JSON). Leave empty for no notifications. |
 | `max_upload_mb` | Largest photo or file upload, in megabytes. Default 20. |
 | `log_level` | How much the server logs: `error`, `warn`, `info` or `debug`. |
 
@@ -57,3 +58,20 @@ machine: it holds the accounts and the encrypted message history.
 ## Hardware
 
 This add-on supports 64-bit Intel and AMD machines (amd64).
+
+## Notifications
+
+Phones are woken through Firebase Cloud Messaging. The server only ever sends
+Firebase "something new in this chat" with an unread count. The message text,
+the sender and the chat name never leave your server unencrypted.
+
+To turn notifications on:
+
+1. In the Firebase console open **Project settings**, then **Service accounts**,
+   and click **Generate new private key**. A JSON file downloads.
+2. Open that file in a text editor, copy everything, and paste it into the
+   `firebase_service_account` option. Save and restart the app.
+3. The log shows `[dartchat-push] Ready` when it works.
+
+That key is a secret. Keep it out of GitHub and chats. If it leaks, delete it
+in the Firebase console and generate a new one.

@@ -57,6 +57,9 @@ export CONTINUWUITY_ALLOW_FEDERATION=false
 export CONTINUWUITY_TRUSTED_SERVERS='[]'
 export CONTINUWUITY_ALLOW_CHECK_FOR_UPDATES=false
 export CONTINUWUITY_NEW_USER_DISPLAYNAME_SUFFIX=""
+# Only the owner may list a chat publicly, so circles cannot meet that way.
+export CONTINUWUITY_LOCKDOWN_PUBLIC_ROOM_DIRECTORY=true
+export CONTINUWUITY_ALLOW_PUBLIC_ROOM_DIRECTORY_WITHOUT_AUTH=false
 
 # Accounts can only be created with a registration token. Friends never see
 # it: they use a personal invitation code, and the invitation service on this
@@ -66,7 +69,9 @@ TOKEN_FILE=/data/internal_registration_token
 if [ ! -s "$TOKEN_FILE" ]; then
   (umask 077 && head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$TOKEN_FILE")
 fi
+SHARED_TOKEN=0
 if [ -n "$REGISTRATION_TOKEN" ]; then
+  SHARED_TOKEN=1
   echo "[dartchat] Sign-up is open to invited people and to anyone with the registration token"
 else
   REGISTRATION_TOKEN="$(cat "$TOKEN_FILE")"
@@ -94,6 +99,7 @@ keep_running() {
 (
   export DARTCHAT_SERVER_NAME="$SERVER_NAME"
   export DARTCHAT_REGISTRATION_TOKEN="$REGISTRATION_TOKEN"
+  export DARTCHAT_SHARED_TOKEN="$SHARED_TOKEN"
   export DARTCHAT_RESEND_KEY="$RESEND_KEY"
   export DARTCHAT_INVITE_FROM="$INVITE_FROM"
   export DARTCHAT_APP_LINK="$APP_LINK"
@@ -122,6 +128,16 @@ http {
     listen 6167;
     location /_dartchat/ {
       proxy_pass http://127.0.0.1:6168;
+    }
+    # Requests that could reveal or contact another account are checked
+    # against the owner's circles before they reach the chat server.
+    location ~ ^/_matrix/client/[^/]+/([^/]+/)?(user_directory/search|profile/|presence/|createRoom|rooms/[^/]+/invite|rooms/[^/]+/state/m\\.room\\.member/|keys/query|keys/claim|login|register) {
+      proxy_pass http://127.0.0.1:6168;
+      proxy_read_timeout 120s;
+    }
+    # This server does not talk to other chat servers.
+    location /_matrix/federation/ {
+      return 404;
     }
     location / {
       proxy_pass http://127.0.0.1:6166;

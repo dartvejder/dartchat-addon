@@ -103,3 +103,19 @@ it at Resend and create a new one.
 The same screen lists the accounts on the server and can deactivate one. A
 deactivated account is signed out everywhere and cannot sign in again. This
 cannot be undone.
+
+## Circles
+
+If you have separate groups of friends who should not see each other, create
+circles in the app: **Invitations and accounts**, then **Circles**. Put each
+account in one or more circles, and pick the circle when you invite someone.
+
+- Two people can find, see and message each other only if they share a
+  circle. To everyone else the username looks like it does not exist.
+- You, the owner, see everyone and everyone sees you.
+- Once at least one circle exists, an account in no circle sees only you.
+- While there are no circles, everyone can reach everyone.
+
+The server enforces this, not just the app. One thing circles do not hide: if
+you put people from different circles into the same group chat, they see each
+other in that chat.

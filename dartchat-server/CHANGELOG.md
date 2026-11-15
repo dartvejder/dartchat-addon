@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Circles: the owner can sort accounts into circles from the app. Two people can find, see and message each other only if they share a circle; to everyone else the username looks like it does not exist. The owner sees everyone and everyone sees the owner. While no circle exists, nothing changes.
+- The server enforces this itself (search, profile lookup, new chats, group invitations, encryption key lookup), so it also holds for other Matrix apps.
+- Strangers can no longer test which usernames exist: sign-in gives the same answer for a wrong password and an unknown username, and direct sign-up is closed once the first account exists (unless `registration_token` is set).
+
 ## 0.3.0
 
 - Invitations: the owner invites friends by email from inside the app. Every invitation has its own code that works once. Paste a Resend API key into the new `resend_api_key` option to have the emails sent; without it the app shows the code so you can pass it on yourself.

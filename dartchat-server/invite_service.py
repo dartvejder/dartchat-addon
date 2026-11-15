@@ -13,6 +13,7 @@ checks with the chat server that the token belongs to a server admin.
 Uses only the Python standard library.
 """
 
+import http.client
 import json
 import os
 import re
@@ -35,6 +36,9 @@ EMAIL_FROM = os.environ.get("DARTCHAT_INVITE_FROM", "")
 APP_LINK = os.environ.get("DARTCHAT_APP_LINK", "")
 PORT = int(os.environ.get("DARTCHAT_INVITE_PORT", "6168"))
 STORE = os.environ.get("DARTCHAT_INVITE_STORE", "/data/invites.json")
+# Set when the owner chose a shared registration token by hand; direct
+# sign-up with that token then stays possible.
+SHARED_TOKEN = os.environ.get("DARTCHAT_SHARED_TOKEN", "") == "1"
 
 # Letters and digits that are hard to mix up when typed from an email.
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -110,7 +114,7 @@ class Store:
     def __init__(self, path):
         self.path = path
         self.lock = threading.Lock()
-        self.data = {"invites": [], "deactivated": []}
+        self.data = {"invites": [], "deactivated": [], "circles": [], "owners": []}
         if os.path.exists(path):
             with open(path, encoding="utf-8") as handle:
                 self.data.update(json.load(handle))
@@ -187,6 +191,10 @@ def require_admin(handler):
     status, body = chat("GET", "/joined_rooms", token=token)
     if status != 200 or admin_room_id not in body.get("joined_rooms", []):
         raise ApiError(403, "M_FORBIDDEN", "Only the server owner can do this.")
+    with store.lock:
+        if user_id not in store.data["owners"]:
+            store.data["owners"].append(user_id)
+            store.save()
     return user_id, token
 
 
@@ -302,6 +310,7 @@ def public_invite(invite):
         shown["code"] = format_code(invite["code"])
     if invite.get("used_by"):
         shown["used_by"] = invite["used_by"]
+    shown["circles"] = invite.get("circles", [])
     return shown
 
 
@@ -357,6 +366,10 @@ def register(handler, body):
             used_by=answer["user_id"],
             used_at=int(time.time() * 1000),
         )
+        for circle in store.data["circles"]:
+            if circle["id"] in invite.get("circles", []):
+                if answer["user_id"] not in circle["members"]:
+                    circle["members"].append(answer["user_id"])
         store.save()
     log(f"Invitation for {invite['email']} used by {answer['user_id']}")
     return {"user_id": answer["user_id"]}
@@ -374,7 +387,13 @@ def create_invite(handler, body):
     email = str(body.get("email", "")).strip().lower()
     if len(email) > 254 or not EMAIL_PATTERN.match(email):
         raise ApiError(400, "DARTCHAT_INVALID_EMAIL", "That is not an email address.")
+    wanted = body.get("circles", [])
+    if not isinstance(wanted, list):
+        raise ApiError(400, "M_INVALID_PARAM", "circles must be a list.")
     with store.lock:
+        known = {circle["id"] for circle in store.data["circles"]}
+        if any(circle_id not in known for circle_id in wanted):
+            raise ApiError(400, "DARTCHAT_NO_CIRCLE", "That circle does not exist.")
         # Inviting the same address again replaces the earlier unused code.
         for old in store.data["invites"]:
             if old["status"] == "pending" and old["email"] == email:
@@ -386,6 +405,7 @@ def create_invite(handler, body):
             "status": "pending",
             "created_at": int(time.time() * 1000),
             "created_by": user_id,
+            "circles": list(wanted),
             "email_sent": False,
         }
         store.data["invites"].append(invite)
@@ -457,6 +477,304 @@ def deactivate_user(handler, body):
     return {"user_id": target, "deactivated": True}
 
 
+
+# ---- circles ------------------------------------------------------------
+#
+# A circle is a set of accounts that can find, see and message each other.
+# The owner sees everyone and everyone sees the owner. While no circle
+# exists, everyone can see everyone.
+
+
+def clean_circle_name(body):
+    name = str(body.get("name", "")).strip()
+    if not name or len(name) > 40:
+        raise ApiError(400, "M_INVALID_PARAM", "Give the circle a name of up to 40 characters.")
+    return name
+
+
+def clean_members(body):
+    members = body.get("members", [])
+    pattern = r"@[a-z0-9._=/+-]+:" + re.escape(SERVER_NAME)
+    if not isinstance(members, list) or not all(
+        isinstance(m, str) and re.fullmatch(pattern, m) for m in members
+    ):
+        raise ApiError(400, "M_INVALID_PARAM", "members must be accounts on this server.")
+    return sorted(set(members))
+
+
+def list_circles(handler, body):
+    require_admin(handler)
+    with store.lock:
+        return {"circles": json.loads(json.dumps(store.data["circles"]))}
+
+
+def create_circle(handler, body):
+    require_admin(handler)
+    name = clean_circle_name(body)
+    members = clean_members(body)
+    with store.lock:
+        circle = {"id": secrets.token_hex(8), "name": name, "members": members}
+        store.data["circles"].append(circle)
+        store.save()
+        return dict(circle)
+
+
+def update_circle(handler, body, circle_id):
+    require_admin(handler)
+    with store.lock:
+        for circle in store.data["circles"]:
+            if circle["id"] == circle_id:
+                if "name" in body:
+                    circle["name"] = clean_circle_name(body)
+                if "members" in body:
+                    circle["members"] = clean_members(body)
+                store.save()
+                return dict(circle)
+    raise ApiError(404, "M_NOT_FOUND", "No such circle.")
+
+
+def delete_circle(handler, body, circle_id):
+    require_admin(handler)
+    with store.lock:
+        before = len(store.data["circles"])
+        store.data["circles"] = [
+            c for c in store.data["circles"] if c["id"] != circle_id
+        ]
+        if len(store.data["circles"]) == before:
+            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
+        for invite in store.data["invites"]:
+            if circle_id in invite.get("circles", []):
+                invite["circles"].remove(circle_id)
+        store.save()
+    return {}
+
+
+# ---- visibility guard -----------------------------------------------------
+#
+# The front door sends the chat-server requests that could reveal or contact
+# another account through here. Each is checked against the circles and then
+# passed on to the chat server.
+
+TOKEN_CACHE_SECONDS = 300
+ROOM_CACHE_SECONDS = 30
+token_cache = {}  # token -> (user id, expires)
+room_cache = {}  # user id -> (set of user ids sharing a room, expires)
+cache_lock = threading.Lock()
+
+NOT_FOUND = (404, {"errcode": "M_NOT_FOUND", "error": "This account does not exist."})
+
+GUARDED = re.compile(
+    r"/_matrix/client/[^/]+/(?:[^/]+/)??(?:"
+    r"(?P<search>user_directory/search)"
+    r"|profile/(?P<profile>[^/]+)(?:/[^/]*)?"
+    r"|presence/(?P<presence>[^/]+)/status"
+    r"|(?P<create>createRoom)"
+    r"|rooms/[^/]+/(?P<invite>invite)"
+    r"|rooms/[^/]+/state/m\.room\.member/(?P<member>[^/]+)"
+    r"|keys/(?P<keys>query|claim)"
+    r"|(?P<login>login)"
+    r"|(?P<register>register(?:/available)?)"
+    r")/?"
+)
+
+
+def forward(handler, raw):
+    """Passes the request on to the chat server unchanged."""
+    connection = http.client.HTTPConnection(
+        urllib.parse.urlsplit(HOMESERVER).netloc, timeout=120
+    )
+    headers = {"User-Agent": handler.headers.get("User-Agent", "dartchat")}
+    for name in ("Authorization", "Content-Type", "X-Forwarded-For"):
+        if handler.headers.get(name):
+            headers[name] = handler.headers[name]
+    try:
+        connection.request(handler.command, handler.path, raw or None, headers)
+        response = connection.getresponse()
+        return response.status, response.read(), response.getheader(
+            "Content-Type", "application/json"
+        )
+    except OSError as error:
+        raise ApiError(
+            502, "DARTCHAT_SERVER_DOWN", "The chat server is not answering."
+        ) from error
+    finally:
+        connection.close()
+
+
+def caller(handler):
+    """The account making a chat-server request."""
+    header = handler.headers.get("Authorization", "")
+    token = header[7:].strip() if header.startswith("Bearer ") else ""
+    if not token:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(handler.path).query)
+        token = (query.get("access_token") or [""])[0]
+    if not token:
+        raise ApiError(401, "M_MISSING_TOKEN", "Missing access token.")
+    now = time.time()
+    with cache_lock:
+        cached = token_cache.get(token)
+        if cached and cached[1] > now:
+            return cached[0], token
+    status, body = chat("GET", "/account/whoami", token=token)
+    if status != 200 or "user_id" not in body:
+        raise ApiError(401, "M_UNKNOWN_TOKEN", "Unknown access token.")
+    with cache_lock:
+        if len(token_cache) > 5000:
+            token_cache.clear()
+        token_cache[token] = (body["user_id"], now + TOKEN_CACHE_SECONDS)
+    return body["user_id"], token
+
+
+def room_mates(user_id, token):
+    """Everyone who is in, or invited to, a chat that [user_id] is in."""
+    now = time.time()
+    with cache_lock:
+        cached = room_cache.get(user_id)
+        if cached and cached[1] > now:
+            return cached[0]
+    mates = set()
+    status, body = chat("GET", "/joined_rooms", token=token)
+    for room_id in body.get("joined_rooms", []) if status == 200 else []:
+        status, members = chat("GET", f"/rooms/{quote(room_id)}/members", token=token)
+        for event in members.get("chunk", []) if status == 200 else []:
+            if event.get("content", {}).get("membership") in ("join", "invite"):
+                mates.add(event.get("state_key"))
+    with cache_lock:
+        room_cache[user_id] = (mates, now + ROOM_CACHE_SECONDS)
+    return mates
+
+
+def in_same_circle(user_id, target):
+    """Whether the circles alone let [user_id] see [target]."""
+    with store.lock:
+        circles = store.data["circles"]
+        owners = store.data["owners"]
+        if not circles or user_id in owners or target in owners:
+            return True
+        return any(
+            user_id in circle["members"] and target in circle["members"]
+            for circle in circles
+        )
+
+
+def may_contact(user_id, target):
+    """Whether [user_id] may start a chat with [target] or invite them."""
+    return (
+        user_id == target
+        or not target.endswith(":" + SERVER_NAME)
+        or in_same_circle(user_id, target)
+    )
+
+
+def may_see(user_id, token, target):
+    """Whether [user_id] may see [target]: allowed to contact them, or they
+    already share a chat."""
+    return may_contact(user_id, target) or target in room_mates(user_id, token)
+
+
+def sign_up_open():
+    """Direct sign-up on the chat server is only for the very first account
+    (or for a shared token the owner set by hand)."""
+    if SHARED_TOKEN:
+        return True
+    with store.lock:
+        return not store.data["owners"] and not any(
+            invite["status"] == "used" for invite in store.data["invites"]
+        )
+
+
+def guard(handler, match, raw):
+    """Returns (status, body bytes, content type) for a guarded request."""
+
+    def as_json(status, body):
+        return status, json.dumps(body).encode(), "application/json"
+
+    try:
+        body = json.loads(raw) if raw else {}
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        body = None
+    method = handler.command
+
+    if match["login"]:
+        status, data, kind = forward(handler, raw)
+        if method == "POST" and status in (403, 404):
+            # Do not tell strangers which usernames exist.
+            try:
+                if json.loads(data).get("errcode") == "M_NOT_FOUND":
+                    return as_json(
+                        403,
+                        {"errcode": "M_FORBIDDEN", "error": "Wrong username or password."},
+                    )
+            except ValueError:
+                pass
+        return status, data, kind
+
+    if match["register"]:
+        if not sign_up_open():
+            return as_json(
+                403,
+                {"errcode": "M_FORBIDDEN", "error": "Sign-up needs an invitation code."},
+            )
+        return forward(handler, raw)
+
+    if method == "OPTIONS":
+        return forward(handler, raw)
+    user_id, token = caller(handler)
+
+    if match["profile"] and method == "GET":
+        target = urllib.parse.unquote(match["profile"])
+        if not may_see(user_id, token, target):
+            return as_json(*NOT_FOUND)
+    elif match["presence"] and method == "GET":
+        target = urllib.parse.unquote(match["presence"])
+        if not may_see(user_id, token, target):
+            return as_json(*NOT_FOUND)
+    elif match["create"] and method == "POST" and body is not None:
+        invited = body.get("invite", [])
+        if isinstance(invited, list) and not all(
+            isinstance(t, str) and may_contact(user_id, t) for t in invited
+        ):
+            return as_json(*NOT_FOUND)
+    elif match["invite"] and method == "POST" and body is not None:
+        target = body.get("user_id")
+        if isinstance(target, str) and not may_contact(user_id, target):
+            return as_json(*NOT_FOUND)
+    elif match["member"] and method == "PUT" and body is not None:
+        target = urllib.parse.unquote(match["member"])
+        if body.get("membership") == "invite" and not may_contact(user_id, target):
+            return as_json(*NOT_FOUND)
+    elif match["keys"] and method == "POST" and body is not None:
+        field = "device_keys" if match["keys"] == "query" else "one_time_keys"
+        wanted = body.get(field)
+        if isinstance(wanted, dict):
+            allowed = {
+                target: value
+                for target, value in wanted.items()
+                if may_see(user_id, token, target)
+            }
+            if len(allowed) != len(wanted):
+                body[field] = allowed
+                raw = json.dumps(body).encode()
+    elif match["search"] and method == "POST":
+        status, data, kind = forward(handler, raw)
+        if status != 200:
+            return status, data, kind
+        try:
+            answer = json.loads(data)
+            answer["results"] = [
+                result
+                for result in answer.get("results", [])
+                if may_see(user_id, token, result.get("user_id", ""))
+            ]
+            return as_json(200, answer)
+        except (ValueError, AttributeError):
+            return as_json(200, {"results": [], "limited": False})
+
+    return forward(handler, raw)
+
+
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
     ("POST", re.compile(r"/register"), register),
@@ -465,6 +783,10 @@ ROUTES = [
     ("DELETE", re.compile(r"/admin/invites/([0-9a-f]{16})"), revoke_invite),
     ("GET", re.compile(r"/admin/users"), list_users),
     ("POST", re.compile(r"/admin/users/deactivate"), deactivate_user),
+    ("GET", re.compile(r"/admin/circles"), list_circles),
+    ("POST", re.compile(r"/admin/circles"), create_circle),
+    ("PUT", re.compile(r"/admin/circles/([0-9a-f]{16})"), update_circle),
+    ("DELETE", re.compile(r"/admin/circles/([0-9a-f]{16})"), delete_circle),
 ]
 
 
@@ -490,14 +812,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def answer_raw(self, status, data, content_type):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def handle_request(self):
         path = urllib.parse.urlsplit(self.path).path
         try:
+            guarded = GUARDED.fullmatch(urllib.parse.unquote(path))
             length = int(self.headers.get("Content-Length") or 0)
-            if length > 16384:
+            if length > (2 * 1024 * 1024 if guarded else 16384):
                 self.close_connection = True
                 raise ApiError(413, "M_TOO_LARGE", "Request too large.")
             raw = self.rfile.read(length) if length else b""
+            if guarded:
+                self.answer_raw(*guard(self, guarded, raw))
+                return
+            if path.startswith("/_matrix/"):
+                # Anything else the front door sends here is passed on as is.
+                self.answer_raw(*forward(self, raw))
+                return
             if not path.startswith(PREFIX + "/"):
                 raise ApiError(404, "M_UNRECOGNIZED", "Not found.")
             sub = path[len(PREFIX):]
@@ -526,7 +863,7 @@ class Handler(BaseHTTPRequestHandler):
             log(f"Unexpected error on {self.command} {path}: {error!r}")
             self.answer(500, {"errcode": "M_UNKNOWN", "error": "Something went wrong."})
 
-    do_GET = do_POST = do_DELETE = handle_request
+    do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = handle_request
 
 
 def main():

@@ -11,6 +11,7 @@ script can stand in for the email service.
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -73,6 +74,133 @@ def login(username, password):
             "password": password,
         },
     )
+
+
+def circles_test(owner, join):
+    """Two circles cannot find, see or contact each other."""
+
+    def invited(email, circles):
+        body = {"email": email, "circles": circles}
+        return expect(call("POST", INVITE + "/admin/invites", body, owner), 200)["code"]
+
+    def account(name, circles):
+        expect(join(invited(f"{name}@example.com", circles), name), 200)
+        return expect(login(name, "ana-password-1"), 200)["access_token"]
+
+    def profile(token, name):
+        return call("GET", f"{MATRIX}/profile/@{name}:chat.test", token=token)
+
+    def search(token, term):
+        body = expect(
+            call("POST", MATRIX + "/user_directory/search", {"search_term": term}, token),
+            200,
+        )
+        return {r["user_id"] for r in body["results"]}
+
+    def create_room(token, invite):
+        body = {"invite": [f"@{name}:chat.test" for name in invite], "preset": "private_chat"}
+        return call("POST", MATRIX + "/createRoom", body, token)
+
+    # Before any circle exists everyone can see everyone.
+    early = account("early", [])
+    expect(profile(early, "boss"), 200)
+
+    school = expect(
+        call("POST", INVITE + "/admin/circles", {"name": "School"}, owner), 200
+    )["id"]
+    work = expect(call("POST", INVITE + "/admin/circles", {"name": "Work"}, owner), 200)["id"]
+    expect(call("POST", INVITE + "/admin/circles", {"name": ""}, owner), 400)
+    expect(call("GET", INVITE + "/admin/circles", token=early), 403)
+    expect(
+        call("POST", INVITE + "/admin/invites", {"email": "x@example.com", "circles": ["nope"]}, owner),
+        400,
+    )
+
+    sam = account("sam", [school])
+    sue = account("sue", [school])
+    wes = account("wes", [work])
+    listed = expect(call("GET", INVITE + "/admin/circles", token=owner), 200)["circles"]
+    members = {c["name"]: c["members"] for c in listed}
+    assert members == {
+        "School": ["@sam:chat.test", "@sue:chat.test"],
+        "Work": ["@wes:chat.test"],
+    }, members
+
+    # Same circle: visible. Other circle: looks like it does not exist.
+    expect(profile(sam, "sue"), 200)
+    expect(profile(sam, "wes"), 404, errcode="M_NOT_FOUND")
+    expect(profile(wes, "sam"), 404, errcode="M_NOT_FOUND")
+    expect(call("GET", f"{MATRIX}/profile/@wes:chat.test/displayname", token=sam), 404)
+    expect(call("GET", f"{MATRIX}/profile/%40wes%3Achat.test", token=sam), 404)
+    expect(call("GET", f"{MATRIX}/profile/@wes:chat.test"), 401)
+    expect(call("GET", f"{MATRIX}/presence/@wes:chat.test/status", token=sam), 404)
+    # Everyone sees the owner, the owner sees everyone, no circle sees only the owner.
+    expect(profile(sam, "boss"), 200)
+    expect(profile(owner, "wes"), 200)
+    expect(profile(early, "sam"), 404)
+    expect(profile(early, "boss"), 200)
+    assert "@wes:chat.test" not in search(sam, "wes"), "search leaks the other circle"
+    assert "@wes:chat.test" not in search(sam, "chat.test")
+
+    # Contact: chats and invitations only inside a circle.
+    expect(create_room(sam, ["wes"]), 404, errcode="M_NOT_FOUND")
+    expect(create_room(sam, ["sue", "wes"]), 404)
+    room = expect(create_room(sam, ["sue"]), 200)["room_id"]
+    invite_path = f"{MATRIX}/rooms/{room}/invite"
+    expect(call("POST", invite_path, {"user_id": "@wes:chat.test"}, sam), 404)
+    expect(
+        call(
+            "PUT",
+            f"{MATRIX}/rooms/{room}/state/m.room.member/@wes:chat.test",
+            {"membership": "invite"},
+            sam,
+        ),
+        404,
+    )
+    keys = expect(
+        call(
+            "POST",
+            MATRIX + "/keys/query",
+            {"device_keys": {"@wes:chat.test": [], "@sue:chat.test": []}},
+            sam,
+        ),
+        200,
+    )
+    assert "@wes:chat.test" not in keys.get("device_keys", {}), keys
+
+    # People the owner puts in one chat do see each other there.
+    mixed = expect(create_room(owner, ["sam", "wes"]), 200)["room_id"]
+    expect(call("POST", f"{MATRIX}/rooms/{mixed}/join", {}, sam), 200)
+    expect(call("POST", f"{MATRIX}/rooms/{mixed}/join", {}, wes), 200)
+    time.sleep(31)  # the shared-chat lookup is cached for half a minute
+    expect(profile(sam, "wes"), 200)
+    expect(create_room(sam, ["wes"]), 404)
+
+    # Moving someone into a circle takes effect at once.
+    expect(
+        call(
+            "PUT",
+            f"{INVITE}/admin/circles/{work}",
+            {"members": ["@wes:chat.test", "@sue:chat.test"]},
+            owner,
+        ),
+        200,
+    )
+    expect(create_room(sue, ["wes"]), 200)
+    expect(call("DELETE", f"{INVITE}/admin/circles/{work}", token=owner), 200)
+    expect(profile(sue, "wes"), 200)  # they share a chat now
+    expect(create_room(sue, ["wes"]), 404)
+
+    # Strangers cannot probe usernames, and direct sign-up is closed.
+    expect(login("sam", "wrong-password"), 403, errcode="M_FORBIDDEN")
+    expect(login("nobody-here", "wrong-password"), 403, errcode="M_FORBIDDEN")
+    expect(
+        call("POST", MATRIX + "/register", {"username": "sam", "password": "x" * 12}),
+        403,
+        errcode="M_FORBIDDEN",
+    )
+    expect(call("GET", MATRIX + "/register/available?username=sam"), 403)
+    expect(call("GET", "/_matrix/federation/v1/version"), 404)
 
 
 def main():
@@ -138,6 +266,8 @@ def main():
     expect(call("POST", deactivate, {"user_id": "@ghost:chat.test"}, owner), 400)
     expect(call("POST", deactivate, {"user_id": "@ana:chat.test"}, owner), 200)
     expect(login("ana", "ana-password-1"), 403, errcode="M_USER_DEACTIVATED")
+
+    circles_test(owner, join)
 
     # Wrong codes are cut off.
     for attempt in range(12):

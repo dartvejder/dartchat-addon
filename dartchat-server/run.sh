@@ -130,6 +130,27 @@ keep_running() {
 ) &
 unset RESEND_KEY REGISTRATION_TOKEN
 
+# The web version runs on its own address (web.dartchat.trade), so the
+# browser asks first whether it may call this server. The chat server answers
+# that itself; the Dart Chat services behind the front door get the same
+# answer here. Sign-in is by token, never by cookie, so any site may ask.
+cat > /tmp/cors.conf <<'EOF'
+add_header Access-Control-Allow-Origin "*" always;
+add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+add_header Access-Control-Allow-Headers "Authorization, Content-Type, Accept, X-Requested-With" always;
+EOF
+cat > /tmp/cors-proxy.conf <<'EOF'
+if ($request_method = OPTIONS) {
+  include /tmp/cors.conf;
+  add_header Access-Control-Max-Age 86400 always;
+  return 204;
+}
+include /tmp/cors.conf;
+proxy_hide_header Access-Control-Allow-Origin;
+proxy_hide_header Access-Control-Allow-Methods;
+proxy_hide_header Access-Control-Allow-Headers;
+EOF
+
 # Front door: one port for the apps. Chat traffic goes to the chat server and
 # /_dartchat/ goes to the invitation service.
 cat > /tmp/nginx.conf <<EOF
@@ -150,14 +171,17 @@ http {
   server {
     listen 6167;
     location /_dartchat/v1/bot/ {
+      include /tmp/cors-proxy.conf;
       proxy_pass http://127.0.0.1:6169;
     }
     location /_dartchat/ {
+      include /tmp/cors-proxy.conf;
       proxy_pass http://127.0.0.1:6168;
     }
     # Requests that could reveal or contact another account are checked
     # against the owner's circles before they reach the chat server.
     location ~ ^/_matrix/client/[^/]+/([^/]+/)?(user_directory/search|profile/|presence/|createRoom|rooms/[^/]+/invite|rooms/[^/]+/state/m\\.room\\.member/|keys/query|keys/claim|login|register|rooms/[^/]+/send/) {
+      include /tmp/cors-proxy.conf;
       proxy_pass http://127.0.0.1:6168;
       proxy_read_timeout 120s;
     }

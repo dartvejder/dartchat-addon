@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.1
+
+- Ready for the Dart Chat web version: the server now answers browsers on another address (such as web.dartchat.trade) for sign-in, sign-up, invitations, circles, groups and the bot, as it already did for plain chat traffic.
+
 ## 0.10.0
 
 - Timed bans and mutes in groups, for the owner only. A ban removes someone from a group for a chosen time; the server lifts it by itself and invites the person back. A mute leaves them in the group, able to read but not to write, until the time is up. Group admins and members cannot use either.

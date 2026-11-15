@@ -304,13 +304,13 @@ def renamed_test(owner, friend, friend_id):
         users = expect(call("GET", INVITE + "/admin/users", token=owner), 200)["users"]
         return next(u for u in users if u["user_id"] == friend_id).get("renamed")
 
-    expect(call("PUT", name, {"displayname": "Lena"}, friend), 200)
-    expect(call("PUT", name, {"displayname": "Lena"}, friend), 200)
+    expect(call("PUT", name, {"displayname": "Lena K."}, friend), 200)
+    expect(call("PUT", name, {"displayname": "Lena K."}, friend), 200)
     # A first name, in place of the username, is not reported.
     assert renamed() is None, renamed()
     expect(call("PUT", name, {"displayname": "Lenche"}, friend), 200)
     after = renamed()
-    assert after and after["from"] == "Lena" and after["at"] > 0, after
+    assert after and after["from"] == "Lena K." and after["at"] > 0, after
     expect(call("GET", name, token=friend), 200, displayname="Lenche")
     # Nobody may rename someone else.
     other = f"{MATRIX}/profile/@boss:chat.test/displayname"

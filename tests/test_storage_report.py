@@ -66,7 +66,8 @@ def test_report_on_the_first_day_has_no_growth_yet():
     today = date(2026, 11, 15)
     _, text, _ = sr.build_report({today.isoformat(): entry(5000)}, today, None)
     assert "measuring starts today" in text
-    assert "Messages (" not in text
+    assert "All messages: 0 / 0 / 0 / 0" in text
+    assert "Counting began on 15 Nov 2026" in text
 
 
 def test_old_measurements_are_thinned_to_monthly():

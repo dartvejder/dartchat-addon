@@ -229,17 +229,15 @@ def load_counts(path=COUNTS):
             data = json.load(handle)
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) and data.get("days") else None
+    return data if isinstance(data, dict) else None
 
 
 def message_table(counts, today):
-    """Rows of (label, yesterday, this month, this year, all counted), or
-    None when nothing has been counted yet. Groups come by name, private
-    chats as one total."""
-    if not counts:
-        return None
-    days = counts.get("days", {})
-    names = counts.get("rooms", {})
+    """(rows of (label, yesterday, this month, this year, all counted), the
+    day counting began). Groups come by name, private chats as one total.
+    With nothing counted yet the rows are zeros, so the section still shows."""
+    days = (counts or {}).get("days", {})
+    names = (counts or {}).get("rooms", {})
     yesterday = (today - timedelta(days=1)).isoformat()
     month, year = today.isoformat()[:7], today.isoformat()[:4]
     periods = [
@@ -263,7 +261,7 @@ def message_table(counts, today):
     rows.append(("All messages", *total(
         lambda d, e: e.get("private", 0) + sum(e.get("groups", {}).values()))))
     rows.append(("Reactions", *total(lambda d, e: e.get("reactions", 0))))
-    return rows, min(days)
+    return rows, min(days) if days else today.isoformat()
 
 
 def build_report(history, today, counts=None):

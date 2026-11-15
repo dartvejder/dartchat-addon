@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- The storage email always shows the Messages section, with zeros and the day counting began while nothing has been counted yet.
+
 ## 0.8.1
 
 - Fix: updating to 0.8.0 with `storage_report_email` left empty was refused by Home Assistant. An empty address now simply turns the email off.

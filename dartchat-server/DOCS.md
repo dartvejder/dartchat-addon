@@ -9,8 +9,11 @@ content.
 | Option | What it does |
 | --- | --- |
 | `server_name` | The address friends connect to, for example `chat.example.com`. Required. |
-| `registration_token` | A secret that lets someone create an account. Leave empty to close sign-up. |
+| `registration_token` | Normally empty: friends join with a personal invitation code. If you set it, anyone who knows this secret can also create an account. |
 | `firebase_service_account` | Turns on phone notifications. Paste the whole contents of the Firebase service account key file (JSON). Leave empty for no notifications. |
+| `resend_api_key` | Lets the server send invitation emails through Resend. Leave empty to pass invitation codes on yourself. |
+| `invite_email_from` | Sender of invitation emails, for example `Dart Chat <invites@example.com>`. Empty uses `invites@` your domain. |
+| `app_link` | Optional link, put in invitation emails, to where friends install the app. |
 | `max_upload_mb` | Largest photo or file upload, in megabytes. Default 20. |
 | `log_level` | How much the server logs: `error`, `warn`, `info` or `debug`. |
 
@@ -28,8 +31,8 @@ will route through your Cloudflare Tunnel.
    server administrator. Until the Dart Chat app is available, any Matrix app
    (for example Element) can do this: choose "other homeserver", enter your
    server address and register.
-4. After the first account exists, the one-time token stops working and the
-   `registration_token` option takes over.
+4. After the first account exists, the one-time token stops working. From
+   then on people join with an invitation code (see Invitations below).
 
 ## Connecting it to the internet
 
@@ -45,7 +48,7 @@ in a browser. You should see a short block of text starting with `versions`.
 ## What is switched off
 
 - Federation: the server never talks to other Matrix servers.
-- Open sign-up: an account needs a registration token.
+- Open sign-up: an account needs an invitation code.
 - Update checks and other calls to outside services.
 
 ## Backups
@@ -75,3 +78,28 @@ To turn notifications on:
 
 That key is a secret. Keep it out of GitHub and chats. If it leaks, delete it
 in the Firebase console and generate a new one.
+
+## Invitations
+
+The owner (the first account, or anyone made a server admin) invites friends
+from the Dart Chat app: **Invitations and accounts** in the menu. Each
+invitation is for one email address and holds one code that works once. An
+unused invitation can be revoked, and inviting the same address again replaces
+the earlier code.
+
+To have the server send the invitation emails:
+
+1. Create an API key at [resend.com](https://resend.com) for a domain you have
+   verified there. "Sending access" is enough.
+2. Paste the key into the `resend_api_key` option. Save and restart the app.
+3. The log shows `[dartchat-invite] Ready. Invitation emails are sent from ...`.
+
+Without a key everything else still works: the app shows each code and you
+pass it on yourself.
+
+That key is a secret too. Keep it out of GitHub and chats. If it leaks, delete
+it at Resend and create a new one.
+
+The same screen lists the accounts on the server and can deactivate one. A
+deactivated account is signed out everywhere and cannot sign in again. This
+cannot be undone.

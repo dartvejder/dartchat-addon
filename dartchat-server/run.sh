@@ -11,6 +11,9 @@ REGISTRATION_TOKEN="$(opt registration_token)"
 MAX_UPLOAD_MB="$(opt max_upload_mb)"
 LOG_LEVEL="$(opt log_level)"
 FIREBASE_ACCOUNT="$(opt firebase_service_account)"
+RESEND_KEY="$(opt resend_api_key)"
+INVITE_FROM="$(opt invite_email_from)"
+APP_LINK="$(opt app_link)"
 
 if [ -z "$SERVER_NAME" ]; then
   echo "[dartchat] FATAL: set 'server_name' in the add-on configuration" >&2
@@ -42,8 +45,10 @@ fi
 
 export CONTINUWUITY_SERVER_NAME="$SERVER_NAME"
 export CONTINUWUITY_DATABASE_PATH=/data/db
-export CONTINUWUITY_ADDRESS=0.0.0.0
-export CONTINUWUITY_PORT=6167
+# The chat server itself listens only inside this add-on. The front door on
+# port 6167 (further down) passes requests on to it.
+export CONTINUWUITY_ADDRESS=127.0.0.1
+export CONTINUWUITY_PORT=6166
 export CONTINUWUITY_MAX_REQUEST_SIZE="$((${MAX_UPLOAD_MB:-20} * 1024 * 1024))"
 export CONTINUWUITY_LOG="${LOG_LEVEL:-info}"
 
@@ -53,16 +58,82 @@ export CONTINUWUITY_TRUSTED_SERVERS='[]'
 export CONTINUWUITY_ALLOW_CHECK_FOR_UPDATES=false
 export CONTINUWUITY_NEW_USER_DISPLAYNAME_SUFFIX=""
 
-# Accounts can only be created by someone who knows the registration token.
-# With no token set, nobody can sign up.
-if [ -n "$REGISTRATION_TOKEN" ]; then
-  export CONTINUWUITY_ALLOW_REGISTRATION=true
-  export CONTINUWUITY_REGISTRATION_TOKEN="$REGISTRATION_TOKEN"
-  echo "[dartchat] Sign-up is open to people who have the registration token"
-else
-  export CONTINUWUITY_ALLOW_REGISTRATION=false
-  echo "[dartchat] Sign-up is closed (no registration token set)"
+# Accounts can only be created with a registration token. Friends never see
+# it: they use a personal invitation code, and the invitation service on this
+# machine registers them with a random token that is generated here once.
+# Setting 'registration_token' by hand replaces it with a code you can share.
+TOKEN_FILE=/data/internal_registration_token
+if [ ! -s "$TOKEN_FILE" ]; then
+  (umask 077 && head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$TOKEN_FILE")
 fi
+if [ -n "$REGISTRATION_TOKEN" ]; then
+  echo "[dartchat] Sign-up is open to invited people and to anyone with the registration token"
+else
+  REGISTRATION_TOKEN="$(cat "$TOKEN_FILE")"
+  echo "[dartchat] Sign-up is by invitation only"
+fi
+export CONTINUWUITY_ALLOW_REGISTRATION=true
+export CONTINUWUITY_REGISTRATION_TOKEN="$REGISTRATION_TOKEN"
+
+# Runs a helper and starts it again if it stops. Exit code 78 means its
+# settings are wrong, so there is no point in trying again.
+keep_running() {
+  name="$1"
+  shift
+  while true; do
+    status=0
+    "$@" || status=$?
+    [ "$status" -eq 78 ] && exit 0
+    echo "[dartchat] $name stopped (code $status), restarting in 5 seconds"
+    sleep 5
+  done
+}
+
+# Invitations: friends create accounts with a personal code, and the owner
+# manages invitations and accounts from the app.
+(
+  export DARTCHAT_SERVER_NAME="$SERVER_NAME"
+  export DARTCHAT_REGISTRATION_TOKEN="$REGISTRATION_TOKEN"
+  export DARTCHAT_RESEND_KEY="$RESEND_KEY"
+  export DARTCHAT_INVITE_FROM="$INVITE_FROM"
+  export DARTCHAT_APP_LINK="$APP_LINK"
+  keep_running "Invitation service" python3 /invite_service.py
+) &
+unset RESEND_KEY REGISTRATION_TOKEN
+
+# Front door: one port for the apps. Chat traffic goes to the chat server and
+# /_dartchat/ goes to the invitation service.
+cat > /tmp/nginx.conf <<EOF
+user nginx;
+worker_processes 1;
+daemon off;
+error_log stderr warn;
+pid /tmp/nginx.pid;
+events { worker_connections 1024; }
+http {
+  access_log off;
+  server_tokens off;
+  client_max_body_size ${MAX_UPLOAD_MB:-20}m;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host \$host;
+  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+  server {
+    listen 6167;
+    location /_dartchat/ {
+      proxy_pass http://127.0.0.1:6168;
+    }
+    location / {
+      proxy_pass http://127.0.0.1:6166;
+      proxy_read_timeout 600s;
+      proxy_send_timeout 600s;
+      proxy_buffering off;
+      proxy_request_buffering off;
+    }
+  }
+}
+EOF
+( keep_running "Front door" nginx -c /tmp/nginx.conf ) &
 
 # Notifications: a small gateway on this machine asks Firebase to wake phones.
 # The chat server normally refuses to call local addresses, so the block list
@@ -71,13 +142,7 @@ export CONTINUWUITY_IP_RANGE_DENYLIST='["10.0.0.0/8","172.16.0.0/12","192.168.0.
 if [ -n "$FIREBASE_ACCOUNT" ]; then
   (
     export DARTCHAT_FIREBASE_ACCOUNT="$FIREBASE_ACCOUNT"
-    while true; do
-      status=0
-      python3 /push_gateway.py || status=$?
-      [ "$status" -eq 78 ] && exit 0
-      echo "[dartchat] Push gateway stopped (code $status), restarting in 5 seconds"
-      sleep 5
-    done
+    keep_running "Push gateway" python3 /push_gateway.py
   ) &
 else
   echo "[dartchat] Notifications are off (no Firebase service account set)"

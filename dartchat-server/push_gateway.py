@@ -4,7 +4,8 @@
 The chat server calls this small service on the same machine whenever a
 signed-in phone has something new. The gateway asks Firebase to wake that
 phone. The wake-up carries only an event ID, a room ID and an unread count:
-never the message, the sender or the chat name.
+never the message, the sender or the chat name. iPhones get a fixed
+"New message" notice instead of a silent wake-up.
 
 It uses nothing outside the Python standard library, plus the `openssl`
 command to sign the request for a Firebase access token.
@@ -95,15 +96,9 @@ class Firebase:
             self._expires = now + int(data.get("expires_in", 3600))
             return self._token
 
-    def wake(self, push_key, data):
+    def wake(self, push_key, data, app_id=""):
         """Returns True when the phone no longer exists and should be dropped."""
-        message = {
-            "message": {
-                "token": push_key,
-                "data": data,
-                "android": {"priority": "high"},
-            }
-        }
+        message = fcm_message(push_key, data, app_id)
         request = urllib.request.Request(
             f"{FCM_BASE}/v1/projects/{self.project}/messages:send",
             data=json.dumps(message).encode(),
@@ -123,6 +118,45 @@ class Firebase:
                 with self._lock:
                     self._token = None
             raise RuntimeError(f"Firebase answered {error.code}") from error
+
+
+def is_iphone(app_id):
+    return str(app_id or "").endswith(".ios")
+
+
+def fcm_message(push_key, data, app_id=""):
+    """Builds what Firebase is asked to deliver to one phone.
+
+    An Android phone gets a silent wake-up and shows "New message" itself.
+    An iPhone cannot be woken that way reliably, so Apple shows a fixed
+    "New message" notice for it. It still names no message, sender or chat.
+    """
+    message = {"token": push_key, "data": data}
+    if not is_iphone(app_id):
+        message["android"] = {"priority": "high"}
+        return {"message": message}
+    try:
+        unread = max(0, int(data.get("unread", "0")))
+    except ValueError:
+        unread = 0
+    if unread == 0:
+        # Everything was read elsewhere: clear the app icon's counter quietly.
+        aps = {"badge": 0, "content-available": 1}
+        headers = {"apns-push-type": "background", "apns-priority": "5"}
+    else:
+        aps = {
+            "alert": {"title": "Dart Chat", "body": "New message"},
+            "sound": "default",
+            "badge": unread,
+        }
+        # One notice at a time, like on Android: a newer one replaces it.
+        headers = {
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+            "apns-collapse-id": "dartchat-new-message",
+        }
+    message["apns"] = {"headers": headers, "payload": {"aps": aps}}
+    return {"message": message}
 
 
 def wake_data(notification):
@@ -166,7 +200,7 @@ def make_handler(firebase):
                 if not push_key:
                     continue
                 try:
-                    if firebase.wake(push_key, data):
+                    if firebase.wake(push_key, data, device.get("app_id", "")):
                         rejected.append(push_key)
                 except Exception as error:  # keep serving whatever happens
                     failed = True

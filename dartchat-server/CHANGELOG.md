@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0
+
+- Notifications for the iPhone app: iPhones get a fixed "New message" notice with the unread count on the app icon, and the counter clears when everything is read on another device. The notice never contains the message, the sender or the chat name. Android phones work as before.
+
 ## 0.5.0
 
 - Group rules: a bot account ("Dart Bot") that brings the Signal link bot's rules to Dart Chat groups: repost check, same news from another site, a watched-name counter, `!lista`/`!stats`/`!top` commands, a midnight report and Home Assistant sensors. The owner switches each rule on or off per group in the app; the bot joins only those groups.

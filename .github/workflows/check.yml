@@ -43,7 +43,8 @@ jobs:
       - name: Run the smoke test
         run: |
           token="$(docker logs server 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
-            | grep -o 'registration token [A-Za-z0-9]*' | awk '{print $3}')"
+            | grep -o 'using the registration token [A-Za-z0-9]*' \
+            | awk '{print $5}' | head -n 1)"
           python3 tests/smoke_test.py http://127.0.0.1:6167 "$token"
 
       - name: Server log

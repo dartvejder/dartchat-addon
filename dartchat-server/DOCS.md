@@ -68,6 +68,8 @@ Phones are woken through Firebase Cloud Messaging. The server only ever sends
 Firebase "something new in this chat" with an unread count. The message text,
 the sender and the chat name never leave your server unencrypted.
 
+The owner also gets a "Someone you invited has joined" notification when an invited friend creates their account. It names nobody; the app shows who it was under Invitations and accounts. It reaches the phones on which the owner has opened that screen.
+
 To turn notifications on:
 
 1. In the Firebase console open **Project settings**, then **Service accounts**,

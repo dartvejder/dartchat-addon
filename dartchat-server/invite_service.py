@@ -36,6 +36,11 @@ EMAIL_FROM = os.environ.get("DARTCHAT_INVITE_FROM", "")
 APP_LINK = os.environ.get("DARTCHAT_APP_LINK", "")
 PORT = int(os.environ.get("DARTCHAT_INVITE_PORT", "6168"))
 STORE = os.environ.get("DARTCHAT_INVITE_STORE", "/data/invites.json")
+# The push gateway on this machine, used to tell an owner's phone that
+# someone they invited has joined.
+PUSH_URL = os.environ.get(
+    "DARTCHAT_PUSH_URL", "http://127.0.0.1:5000/_matrix/push/v1/notify"
+)
 # The group-rules bot (group_bot/). It joins only groups the owner chose, and
 # group members must be able to reach its encryption keys whatever their circle.
 BOT_USERNAME = "dartbot"
@@ -199,7 +204,69 @@ def require_admin(handler):
         if user_id not in store.data["owners"]:
             store.data["owners"].append(user_id)
             store.save()
+    remember_phones(user_id, token)
     return user_id, token
+
+
+def remember_phones(user_id, token):
+    """Notes which phones an owner is signed in on, for the "joined" notice.
+
+    Only the owner's own sign-in can list their phones, so this is refreshed
+    whenever the owner uses the invitation screen.
+    """
+    try:
+        status, body = chat("GET", "/pushers", token=token)
+    except ApiError:
+        return
+    if status != 200:
+        return
+    phones = [
+        {"pushkey": pusher["pushkey"], "app_id": pusher.get("app_id", "")}
+        for pusher in body.get("pushers") or []
+        if isinstance(pusher, dict)
+        and pusher.get("kind") == "http"
+        and pusher.get("pushkey")
+    ]
+    with store.lock:
+        known = store.data.setdefault("owner_phones", {})
+        if known.get(user_id) != phones:
+            known[user_id] = phones
+            store.save()
+
+
+def notify_joined(inviter):
+    """Wakes the inviting owner's phones with a "someone joined" notice.
+
+    Like every wake-up, it names nobody: the phone shows a fixed text and
+    the owner looks up who it was in the app.
+    """
+    with store.lock:
+        known = store.data.get("owner_phones", {})
+        phones = list(known.get(inviter) or [])
+        if not phones:
+            phones = [phone for owner in known.values() for phone in owner]
+    if not phones:
+        return
+
+    def send():
+        try:
+            status, _ = http_json(
+                "POST",
+                PUSH_URL,
+                {
+                    "notification": {
+                        "kind": "joined",
+                        "counts": {"unread": 1},
+                        "devices": phones,
+                    }
+                },
+            )
+            if status != 200:
+                log(f"The joined notice was not sent (status {status})")
+        except (urllib.error.URLError, OSError) as error:
+            log(f"The joined notice was not sent: {error}")
+
+    threading.Thread(target=send, daemon=True).start()
 
 
 def admin_command(token, command):
@@ -378,6 +445,7 @@ def register(handler, body):
                     circle["members"].append(answer["user_id"])
         store.save()
     log(f"Invitation for {invite['email']} used by {answer['user_id']}")
+    notify_joined(invite.get("created_by"))
     return {"user_id": answer["user_id"]}
 
 

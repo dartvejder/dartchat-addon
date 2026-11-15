@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- The owner's phone gets a "Someone you invited has joined" notification when an invited friend creates their account. The notification names nobody; the app shows who it was under Invitations and accounts. It reaches the phones the owner has opened the invitation screen on.
+
 ## 0.6.0
 
 - Notifications for the iPhone app: iPhones get a fixed "New message" notice with the unread count on the app icon, and the counter clears when everything is read on another device. The notice never contains the message, the sender or the chat name. Android phones work as before.

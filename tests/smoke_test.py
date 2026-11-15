@@ -296,6 +296,27 @@ def scheduled_test(owner):
     expect(call("GET", path, token=owner), 200, scheduled=[])
 
 
+def renamed_test(owner, friend, friend_id):
+    """The owner's accounts list shows the name someone had before."""
+    name = f"{MATRIX}/profile/{friend_id}/displayname"
+
+    def renamed():
+        users = expect(call("GET", INVITE + "/admin/users", token=owner), 200)["users"]
+        return next(u for u in users if u["user_id"] == friend_id).get("renamed")
+
+    expect(call("PUT", name, {"displayname": "Lena"}, friend), 200)
+    expect(call("PUT", name, {"displayname": "Lena"}, friend), 200)
+    # A first name, in place of the username, is not reported.
+    assert renamed() is None, renamed()
+    expect(call("PUT", name, {"displayname": "Lenche"}, friend), 200)
+    after = renamed()
+    assert after and after["from"] == "Lena" and after["at"] > 0, after
+    expect(call("GET", name, token=friend), 200, displayname="Lenche")
+    # Nobody may rename someone else.
+    other = f"{MATRIX}/profile/@boss:chat.test/displayname"
+    assert call("PUT", other, {"displayname": "x"}, friend)[0] in (400, 403)
+
+
 def moderation_test(owner, friend, friend_id):
     """Only the owner bans or mutes for a while, and it ends by itself.
     The test server counts a "minute" as one second."""
@@ -440,11 +461,9 @@ def main():
         call("POST", INVITE + "/admin/invites", {"email": "lena@example.com"}, owner), 200
     )
     expect(join(lena["code"], "lena", "lena-password-1"), 200)
-    moderation_test(
-        owner,
-        expect(login("lena", "lena-password-1"), 200)["access_token"],
-        "@lena:chat.test",
-    )
+    lena_token = expect(login("lena", "lena-password-1"), 200)["access_token"]
+    moderation_test(owner, lena_token, "@lena:chat.test")
+    renamed_test(owner, lena_token, "@lena:chat.test")
     bot = expect(
         call("POST", INVITE + "/admin/invites", {"email": "bot@example.com"}, owner), 200
     )

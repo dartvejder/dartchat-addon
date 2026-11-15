@@ -145,11 +145,11 @@ def fcm_message(push_key, data, app_id=""):
         aps = {"badge": 0, "content-available": 1}
         headers = {"apns-push-type": "background", "apns-priority": "5"}
     else:
-        joined = data.get("kind") == "joined"
+        notice = NOTICES.get(data.get("kind"))
         aps = {
             "alert": {
                 "title": "Dart Chat",
-                "body": "Someone you invited has joined" if joined else "New message",
+                "body": notice[0] if notice else "New message",
             },
             "sound": "default",
             "badge": unread,
@@ -158,10 +158,17 @@ def fcm_message(push_key, data, app_id=""):
         headers = {
             "apns-push-type": "alert",
             "apns-priority": "10",
-            "apns-collapse-id": "dartchat-joined" if joined else "dartchat-new-message",
+            "apns-collapse-id": notice[1] if notice else "dartchat-new-message",
         }
     message["apns"] = {"headers": headers, "payload": {"aps": aps}}
     return {"message": message}
+
+
+# The owner's notices: the fixed iPhone text and what replaces what.
+NOTICES = {
+    "joined": ("Someone you invited has joined", "dartchat-joined"),
+    "renamed": ("Someone changed their name", "dartchat-renamed"),
+}
 
 
 def wake_data(notification):
@@ -174,8 +181,9 @@ def wake_data(notification):
     data["unread"] = str(counts.get("unread", 0))
     # Sent by the invitation service when an invited friend creates their
     # account. It says only that someone joined, not who.
-    if notification.get("kind") == "joined":
-        data["kind"] = "joined"
+    # "renamed" says, just as bare, that someone changed their display name.
+    if notification.get("kind") in NOTICES:
+        data["kind"] = notification["kind"]
     return data
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0
+
+- When someone changes their display name, the owner's phones get a notice. Like every notice it names nobody; the owner's accounts list in the app shows the new name and the one before it. A person's first name and the owner's own changes are not reported.
+
 ## 0.10.0
 
 - Timed bans and mutes in groups, for the owner only. A ban removes someone from a group for a chosen time; the server lifts it by itself and invites the person back. A mute leaves them in the group, able to read but not to write, until the time is up. Group admins and members cannot use either.

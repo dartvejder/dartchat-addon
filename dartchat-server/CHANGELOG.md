@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+- Group rules: a bot account ("Dart Bot") that brings the Signal link bot's rules to Dart Chat groups: repost check, same news from another site, a watched-name counter, `!lista`/`!stats`/`!top` commands, a midnight report and Home Assistant sensors. The owner switches each rule on or off per group in the app; the bot joins only those groups.
+- New options for the bot's texts, see the Group rules section of the documentation.
+- The add-on can now publish sensors to Home Assistant (`homeassistant_api`).
+
 ## 0.4.0
 
 - Circles: the owner can sort accounts into circles from the app. Two people can find, see and message each other only if they share a circle; to everyone else the username looks like it does not exist. The owner sees everyone and everyone sees the owner. While no circle exists, nothing changes.

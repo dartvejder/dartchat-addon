@@ -119,3 +119,29 @@ account in one or more circles, and pick the circle when you invite someone.
 The server enforces this, not just the app. One thing circles do not hide: if
 you put people from different circles into the same group chat, they see each
 other in that chat.
+
+## Group rules
+
+The group bot brings the rules of a Signal link bot to Dart Chat groups. You
+choose, per group, which rules apply: in the app open the group, tap its name,
+and use **Group rules** (only the server owner sees it, and you need to be an
+admin of that group). Switching any rule on adds the bot account ("Dart Bot")
+to the group; switching all of them off makes it leave.
+
+| Rule | What it does |
+| --- | --- |
+| Repost check | When a link is posted again, it replies quoting the first post (`repost_reply_text`, or `self_repost_reply_text` for your own link) and adds a score line (`repost_count_text`). It knows the same Instagram, X, YouTube, TikTok, Reddit, Facebook, Bluesky and Spotify post under different addresses, ignores tracking junk and follows short links. |
+| Same news from another site | Compares headlines (Latin and Cyrillic, word endings) with links from the last `news_window_days` days and replies `news_reply_text`. Counts as a repost. `news_threshold` is how much of the headline must match. |
+| Watched name | Links whose headline or address mention one of `keyword_words` get `keyword_reply_text` and their own score. Shown only once `keyword_words` is set; `keyword_rule_name` is its name in the app and in the reports. |
+| Commands | Answers `list_commands` (repeaters list), `stats_commands` (today's numbers), `top_commands` (today's top list) and `keyword_commands`. |
+| Midnight report | Right after midnight (`timezone`), posts the day's statistics and top list. |
+| Home Assistant sensors | Shows the group's numbers as sensors named after the group, for example `sensor.dartchat_drustvo_poruke_danas`. |
+
+In texts, `|` separates options picked at random, `{name}` and `{date}` are
+who posted the link first and when, and in score lines `{count}` and `{puta}`
+(put/puta) are filled in. `group_bot_name` is the bot's name in groups.
+
+Messages are end-to-end encrypted, so the bot reads a group as a member of it,
+from the moment it joins. It keeps only links, headlines and counts in
+`/data/group_bot`, never message text. If you delete a message, its links stop
+counting as the first post.

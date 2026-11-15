@@ -81,16 +81,19 @@ async def main():
         clients = [owner, friend]
         await step(clients)
         async with aiohttp.ClientSession() as http:
-            status, body = await api(http, "GET", "/status", friend.access_token)
-            assert status == 403, (status, body)
             deadline = time.time() + 120
             while True:
-                status, body = await api(http, "GET", "/status", owner.access_token)
-                assert status == 200, (status, body)
-                if body["ready"]:
+                try:
+                    status, body = await api(http, "GET", "/status", owner.access_token)
+                except (aiohttp.ClientError, ValueError):
+                    status, body = 0, {}
+                if status == 200 and body["ready"]:
                     break
+                assert status in (0, 200, 502), (status, body)
                 assert time.time() < deadline, "the bot did not get ready"
                 await asyncio.sleep(2)
+            status, _ = await api(http, "GET", "/status", friend.access_token)
+            assert status == 403, status
             bot_id = body["user_id"]
             assert [r["id"] for r in body["rules"]][:2] == ["repost", "same_news"], body
 

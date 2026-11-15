@@ -98,7 +98,11 @@ def circles_test(owner, join):
         return {r["user_id"] for r in body["results"]}
 
     def create_room(token, invite):
-        body = {"invite": [f"@{name}:chat.test" for name in invite], "preset": "private_chat"}
+        body = {
+            "invite": [f"@{name}:chat.test" for name in invite],
+            "preset": "private_chat",
+            "is_direct": len(invite) == 1,
+        }
         return call("POST", MATRIX + "/createRoom", body, token)
 
     # Before any circle exists everyone can see everyone.
@@ -156,6 +160,41 @@ def circles_test(owner, join):
             sam,
         ),
         404,
+    )
+    # Groups: only the owner creates them and adds people. Everyone else
+    # keeps conversations between two people.
+    expect(create_room(sam, []), 403, errcode="M_FORBIDDEN")
+    expect(
+        call("POST", MATRIX + "/createRoom", {"name": "Party", "invite": ["@sue:chat.test"]}, sam),
+        403,
+        errcode="M_FORBIDDEN",
+    )
+    expect(call("POST", MATRIX + "/createRoom", "nonsense", sam), 400)
+    expect(call("POST", invite_path, {"user_id": "@boss:chat.test"}, sam), 403)
+    expect(
+        call(
+            "PUT",
+            f"{MATRIX}/rooms/{room}/state/m.room.member/@boss:chat.test",
+            {"membership": "invite"},
+            sam,
+        ),
+        403,
+        errcode="M_FORBIDDEN",
+    )
+    expect(call("POST", invite_path, {}, sam), 400)
+    club = expect(create_room(owner, ["sam", "sue"]), 200)["room_id"]
+    expect(call("POST", f"{MATRIX}/rooms/{club}/join", {}, sam), 200)
+    expect(
+        call("POST", f"{MATRIX}/rooms/{club}/invite", {"user_id": "@early:chat.test"}, sam),
+        404,
+    )
+    expect(
+        call("POST", f"{MATRIX}/rooms/{club}/invite", {"user_id": "@boss:chat.test"}, sam),
+        403,
+    )
+    expect(
+        call("POST", f"{MATRIX}/rooms/{club}/invite", {"user_id": "@early:chat.test"}, owner),
+        200,
     )
     keys = expect(
         call(

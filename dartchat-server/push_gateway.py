@@ -4,7 +4,8 @@
 The chat server calls this small service on the same machine whenever a
 signed-in phone has something new. The gateway asks Firebase to wake that
 phone. The wake-up carries only an event ID, a room ID and an unread count:
-never the message, the sender or the chat name. iPhones get a fixed
+never the message, the sender or the chat name. The one other wake-up, sent
+when an invited friend creates their account, says only that someone joined. iPhones get a fixed
 "New message" notice instead of a silent wake-up.
 
 It uses nothing outside the Python standard library, plus the `openssl`
@@ -144,8 +145,12 @@ def fcm_message(push_key, data, app_id=""):
         aps = {"badge": 0, "content-available": 1}
         headers = {"apns-push-type": "background", "apns-priority": "5"}
     else:
+        joined = data.get("kind") == "joined"
         aps = {
-            "alert": {"title": "Dart Chat", "body": "New message"},
+            "alert": {
+                "title": "Dart Chat",
+                "body": "Someone you invited has joined" if joined else "New message",
+            },
             "sound": "default",
             "badge": unread,
         }
@@ -153,7 +158,7 @@ def fcm_message(push_key, data, app_id=""):
         headers = {
             "apns-push-type": "alert",
             "apns-priority": "10",
-            "apns-collapse-id": "dartchat-new-message",
+            "apns-collapse-id": "dartchat-joined" if joined else "dartchat-new-message",
         }
     message["apns"] = {"headers": headers, "payload": {"aps": aps}}
     return {"message": message}
@@ -167,6 +172,10 @@ def wake_data(notification):
             data[key] = str(notification[key])
     counts = notification.get("counts") or {}
     data["unread"] = str(counts.get("unread", 0))
+    # Sent by the invitation service when an invited friend creates their
+    # account. It says only that someone joined, not who.
+    if notification.get("kind") == "joined":
+        data["kind"] = "joined"
     return data
 
 

@@ -68,6 +68,8 @@ Phones are woken through Firebase Cloud Messaging. The server only ever sends
 Firebase "something new in this chat" with an unread count. The message text,
 the sender and the chat name never leave your server unencrypted.
 
+The owner also gets a "Someone you invited has joined" notification when an invited friend creates their account. It names nobody; the app shows who it was under Invitations and accounts. It reaches the phones on which the owner has opened that screen.
+
 To turn notifications on:
 
 1. In the Firebase console open **Project settings**, then **Service accounts**,
@@ -119,6 +121,14 @@ account in one or more circles, and pick the circle when you invite someone.
 The server enforces this, not just the app. One thing circles do not hide: if
 you put people from different circles into the same group chat, they see each
 other in that chat.
+
+## Who can make groups
+
+Only you, the owner, can create a group or add people to one. Everyone else
+can start a chat with one person inside their circle and accept the group
+invitations you send. The server enforces this, not just the app. Making a
+friend an admin of a group lets them remove people and change the group's
+name and picture, but not add anyone.
 
 ## Group rules
 

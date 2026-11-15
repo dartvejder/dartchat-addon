@@ -7,11 +7,14 @@ Usage: bot_e2e.py <server url> <owner user> <owner password>
 The owner and the friend sign in with encryption on (like the app), the
 owner makes an encrypted group, switches rules on for it, and the test checks
 that the bot replies to a repeated link and answers a command, and leaves
-when the rules are switched off. Needs matrix-nio[e2e].
+when the rules are switched off. With BOT_RESTART_CMD set, it also restarts the
+bot in the middle. Needs matrix-nio[e2e].
 """
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -23,6 +26,8 @@ from nio import AsyncClient, AsyncClientConfig, RoomMessageNotice
 BASE = sys.argv[1]
 OWNER, OWNER_PASSWORD, FRIEND, FRIEND_PASSWORD = sys.argv[2:6]
 BOT_API = (sys.argv[6] if len(sys.argv) > 6 else BASE) + "/_dartchat/v1/bot"
+# A shell command that restarts the bot, to test that it survives one.
+RESTART = os.environ.get("BOT_RESTART_CMD", "")
 ALL_RULES = ["repost", "same_news", "keyword", "commands", "daily_report", "ha_sensors"]
 
 
@@ -66,6 +71,20 @@ async def api(http, method, path, token, body=None):
         return resp.status, await resp.json(content_type=None)
 
 
+async def bot_ready(http, owner):
+    deadline = time.time() + 120
+    while True:
+        try:
+            status, body = await api(http, "GET", "/status", owner.access_token)
+        except (aiohttp.ClientError, ValueError):
+            status, body = 0, {}
+        if status == 200 and body["ready"]:
+            return body
+        assert status in (0, 200, 502), (status, body)
+        assert time.time() < deadline, "the bot did not get ready"
+        await asyncio.sleep(2)
+
+
 async def send(client, room_id, text):
     response = await client.room_send(room_id, "m.room.message",
                                       {"msgtype": "m.text", "body": text},
@@ -81,17 +100,7 @@ async def main():
         clients = [owner, friend]
         await step(clients)
         async with aiohttp.ClientSession() as http:
-            deadline = time.time() + 120
-            while True:
-                try:
-                    status, body = await api(http, "GET", "/status", owner.access_token)
-                except (aiohttp.ClientError, ValueError):
-                    status, body = 0, {}
-                if status == 200 and body["ready"]:
-                    break
-                assert status in (0, 200, 502), (status, body)
-                assert time.time() < deadline, "the bot did not get ready"
-                await asyncio.sleep(2)
+            body = await bot_ready(http, owner)
             status, _ = await api(http, "GET", "/status", friend.access_token)
             assert status == 403, status
             bot_id = body["user_id"]
@@ -139,6 +148,28 @@ async def main():
             await send(friend, room_id, "!lista")
             await until(clients, lambda: any("Lista ponavljača" in e.body
                                              for _, e in owner.notices), "the list")
+
+            # After a restart the bot still knows its groups: the owner can
+            # change the rules and replies are still encrypted.
+            if RESTART:
+                subprocess.run(RESTART, shell=True, check=True)
+                await asyncio.sleep(3)
+                await bot_ready(http, owner)
+                status, body = await api(
+                    http, "PUT", path, owner.access_token,
+                    {"rules": {"repost": True, "commands": True, "daily_report": True}})
+                assert status == 200 and body["rules"]["daily_report"], (status, body)
+                assert body["bot_in_group"], body
+                await send(friend, room_id, "https://x.com/a/status/42")
+                await asyncio.sleep(2)
+                await send(owner, room_id, "https://twitter.com/b/status/42?s=46")
+
+                def second():
+                    return [e for r, e in friend.notices
+                            if r == room_id and "repostovao 2 puta" in e.body]
+
+                await until(clients, second, "the reply after a restart")
+                assert second()[0].decrypted, "the bot's reply was not encrypted"
 
             # Only the owner's ban and mute commands count.
             def said(text):

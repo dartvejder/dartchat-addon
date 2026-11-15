@@ -81,6 +81,10 @@ class Service:
         self.user_id = f"@{USERNAME}:{SERVER_NAME}"
         self.admin_room_id: str | None = None
         self.catching_up = True
+        # The first sync after a start asks for every group's full state:
+        # the saved position alone would leave the bot not knowing its groups
+        # (who is in them, that they are encrypted) until something changes.
+        self.first_sync = True
         self.senders: dict[str, str] = {}  # recent event id -> sender, for reply stats
 
     # -- talking to the chat server directly (not through the front door) --------
@@ -267,6 +271,12 @@ class Service:
         content = {"msgtype": "m.notice", "body": text}
         if reply_to:
             content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_to}}
+        if room_id not in self.client.rooms:
+            # Without the group's state the bot cannot tell that it is
+            # encrypted, and must not answer in the clear.
+            log.warning("not answering in a group whose state is not loaded yet")
+            self.first_sync = True
+            return False
         try:
             response = await self.client.room_send(room_id, "m.room.message", content,
                                                    ignore_unverified_devices=True)
@@ -284,8 +294,9 @@ class Service:
     async def run_sync(self) -> None:
         while True:
             try:
-                response = await self.client.sync(timeout=30000, full_state=self.catching_up)
+                response = await self.client.sync(timeout=30000, full_state=self.first_sync)
                 if hasattr(response, "next_batch"):
+                    self.first_sync = False
                     if self.client.should_upload_keys:
                         await self.client.keys_upload()
                     if self.client.should_query_keys:
@@ -311,7 +322,7 @@ class Service:
         """Join groups the owner switched on, and leave any others."""
         for room_id in list(self.client.invited_rooms):
             await self.on_invite_room(room_id)
-        for room_id in list(self.client.rooms):
+        for room_id in await self.joined_rooms():
             if not self.rules.active(room_id):
                 await self.leave(room_id)
 
@@ -361,20 +372,30 @@ class Service:
         request["joined_rooms"] = rooms
         return body["user_id"], token
 
-    def room_state(self, room_id: str) -> dict:
-        joined = bool(self.client and room_id in self.client.rooms)
-        return {"room_id": room_id, "rules": self.rules.get(room_id), "bot_in_group": joined}
+    async def joined_rooms(self) -> set[str]:
+        """The groups the bot is in, as the chat server has it."""
+        if not self.client:
+            return set()
+        status, body = await self.chat("GET", "/joined_rooms", token=self.client.access_token)
+        if status != 200:
+            return set(self.client.rooms)
+        return set(body.get("joined_rooms", []))
+
+    def room_state(self, room_id: str, joined: set[str]) -> dict:
+        return {"room_id": room_id, "rules": self.rules.get(room_id),
+                "bot_in_group": room_id in joined}
 
     async def api_status(self, request):
         await self.require_owner(request)
+        joined = await self.joined_rooms()
         return {"ready": self.bot.ready, "user_id": self.user_id,
                 "name": self.settings.bot_name, "rules": describe(self.settings),
-                "groups": [dict(self.room_state(r), name=self.room_name(r))
+                "groups": [dict(self.room_state(r, joined), name=self.room_name(r))
                            for r in self.rules.active_rooms()]}
 
     async def api_get_room(self, request):
         await self.require_owner(request)
-        return self.room_state(request.match_info["room_id"])
+        return self.room_state(request.match_info["room_id"], await self.joined_rooms())
 
     async def api_put_room(self, request):
         owner, token = await self.require_owner(request)
@@ -391,7 +412,8 @@ class Service:
             raise ApiError(503, "DARTCHAT_BOT_STARTING", "The group bot is starting. "
                            "Try again in a minute.")
         wanted = {r: bool(body["rules"].get(r)) for r in RULES}
-        if any(wanted.values()) and room_id not in self.client.rooms:
+        in_group = room_id in await self.joined_rooms()
+        if any(wanted.values()) and not in_group:
             status, answer = await self.chat(
                 "POST", f"/rooms/{quote(room_id)}/invite", {"user_id": self.user_id}, token)
             if status != 200 and "already" not in str(answer.get("error", "")).lower():
@@ -404,11 +426,11 @@ class Service:
             await self.join(room_id)
         else:
             self.rules.set(room_id, wanted)
-            if not any(wanted.values()) and room_id in self.client.rooms:
+            if not any(wanted.values()) and in_group:
                 await self.leave(room_id)
         log.info("%s set group rules: %s", owner,
                  ", ".join(r for r, on in wanted.items() if on) or "none")
-        return self.room_state(room_id)
+        return self.room_state(room_id, await self.joined_rooms())
 
     def app(self) -> web.Application:
         def wrap(handler):

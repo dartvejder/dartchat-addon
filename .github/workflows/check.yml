@@ -55,7 +55,8 @@ jobs:
 
       - name: Test the group bot in an encrypted group
         run: |
-          timeout 300 python3 tests/bot_e2e.py http://127.0.0.1:6167 \
+          BOT_RESTART_CMD="docker exec server pkill -f group_bot" \
+            timeout 400 python3 tests/bot_e2e.py http://127.0.0.1:6167 \
             boss boss-password-1 lena lena-password-1
 
       - name: Server log

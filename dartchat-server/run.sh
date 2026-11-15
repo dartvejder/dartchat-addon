@@ -105,6 +105,14 @@ keep_running() {
   export DARTCHAT_APP_LINK="$APP_LINK"
   keep_running "Invitation service" python3 /invite_service.py
 ) &
+# Group rules: a bot account that applies the owner's rules (repost check
+# and the rest) in the groups the owner switches on in the app.
+(
+  export DARTCHAT_SERVER_NAME="$SERVER_NAME"
+  export DARTCHAT_REGISTRATION_TOKEN="$REGISTRATION_TOKEN"
+  export PYTHONPATH=/opt/group_bot/lib:/opt/group_bot
+  keep_running "Group bot" python3 -m group_bot
+) &
 unset RESEND_KEY REGISTRATION_TOKEN
 
 # Front door: one port for the apps. Chat traffic goes to the chat server and
@@ -126,6 +134,9 @@ http {
   proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   server {
     listen 6167;
+    location /_dartchat/v1/bot/ {
+      proxy_pass http://127.0.0.1:6169;
+    }
     location /_dartchat/ {
       proxy_pass http://127.0.0.1:6168;
     }

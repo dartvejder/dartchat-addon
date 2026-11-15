@@ -36,6 +36,10 @@ EMAIL_FROM = os.environ.get("DARTCHAT_INVITE_FROM", "")
 APP_LINK = os.environ.get("DARTCHAT_APP_LINK", "")
 PORT = int(os.environ.get("DARTCHAT_INVITE_PORT", "6168"))
 STORE = os.environ.get("DARTCHAT_INVITE_STORE", "/data/invites.json")
+# The group-rules bot (group_bot/). It joins only groups the owner chose, and
+# group members must be able to reach its encryption keys whatever their circle.
+BOT_USERNAME = "dartbot"
+BOT_USER = f"@{BOT_USERNAME}:{SERVER_NAME}"
 # Set when the owner chose a shared registration token by hand; direct
 # sign-up with that token then stays possible.
 SHARED_TOKEN = os.environ.get("DARTCHAT_SHARED_TOKEN", "") == "1"
@@ -334,6 +338,8 @@ def register(handler, body):
         raise ApiError(400, "M_WEAK_PASSWORD", "The password needs at least 8 characters.")
     if not username:
         raise ApiError(400, "M_INVALID_USERNAME", "Pick a username.")
+    if username == BOT_USERNAME:
+        raise ApiError(400, "M_USER_IN_USE", "That username is taken.")
     with store.lock:
         invite = store.pending_by_code(code) if code else None
         if invite is None:
@@ -452,7 +458,7 @@ def list_users(handler, body):
             "deactivated": name in deactivated,
         }
         for name in names
-        if name != bot
+        if name not in (bot, BOT_USER)
     ]
     return {"users": users}
 
@@ -669,6 +675,8 @@ def may_contact(user_id, target):
 def may_see(user_id, token, target):
     """Whether [user_id] may see [target]: allowed to contact them, or they
     already share a chat."""
+    if BOT_USER in (user_id, target):
+        return True
     return may_contact(user_id, target) or target in room_mates(user_id, token)
 
 
@@ -766,7 +774,8 @@ def guard(handler, match, raw):
             answer["results"] = [
                 result
                 for result in answer.get("results", [])
-                if may_see(user_id, token, result.get("user_id", ""))
+                if result.get("user_id") != BOT_USER
+                and may_see(user_id, token, result.get("user_id", ""))
             ]
             return as_json(200, answer)
         except (ValueError, AttributeError):

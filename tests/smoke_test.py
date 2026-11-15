@@ -269,6 +269,16 @@ def main():
 
     circles_test(owner, join)
 
+    # A friend for the group bot test (tests/bot_e2e.py), which runs next.
+    lena = expect(
+        call("POST", INVITE + "/admin/invites", {"email": "lena@example.com"}, owner), 200
+    )
+    expect(join(lena["code"], "lena", "lena-password-1"), 200)
+    bot = expect(
+        call("POST", INVITE + "/admin/invites", {"email": "bot@example.com"}, owner), 200
+    )
+    expect(join(bot["code"], "dartbot"), 400, errcode="M_USER_IN_USE")
+
     # Wrong codes are cut off.
     for attempt in range(12):
         result = join(f"ZZZZ-ZZZ{attempt % 10}", "x", "x-password-1")

@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.4.0"
+version: "0.5.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -15,6 +15,8 @@ ports:
 ports_description:
   6167/tcp: Chat server (point your Cloudflare Tunnel here)
 watchdog: http://[HOST]:[PORT:6167]/_matrix/client/versions
+# Lets the group bot show group numbers as Home Assistant sensors.
+homeassistant_api: true
 options:
   server_name: ""
   registration_token: ""
@@ -24,6 +26,24 @@ options:
   app_link: ""
   max_upload_mb: 20
   log_level: info
+  group_bot_name: "Dart Bot"
+  repost_reply_text: "Idi u cosak!"
+  self_repost_reply_text: "Repostovao si svoj link, idi u cosak duplo!"
+  repost_count_text: "{name} je repostovao {count} {puta}"
+  list_commands: "!lista,!repeaters"
+  list_title: "Lista ponavljača:"
+  stats_commands: "!stats"
+  top_commands: "!top"
+  news_reply_text: "Ovo je već bilo, samo sa drugog sajta 👀"
+  news_window_days: 3
+  news_threshold: 0.6
+  keyword_rule_name: ""
+  keyword_words: ""
+  keyword_reply_text: ""
+  keyword_count_text: "{name}: {count}"
+  keyword_commands: ""
+  expand_short_links: true
+  timezone: "Europe/Belgrade"
 schema:
   server_name: str
   registration_token: password?
@@ -33,3 +53,21 @@ schema:
   app_link: str?
   max_upload_mb: int(1,100)
   log_level: list(error|warn|info|debug)
+  group_bot_name: str?
+  repost_reply_text: str?
+  self_repost_reply_text: str?
+  repost_count_text: str?
+  list_commands: str?
+  list_title: str?
+  stats_commands: str?
+  top_commands: str?
+  news_reply_text: str?
+  news_window_days: float(0.5,30)?
+  news_threshold: float(0.3,1)?
+  keyword_rule_name: str?
+  keyword_words: str?
+  keyword_reply_text: str?
+  keyword_count_text: str?
+  keyword_commands: str?
+  expand_short_links: bool?
+  timezone: str?

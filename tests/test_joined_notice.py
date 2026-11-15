@@ -80,3 +80,56 @@ def test_nothing_is_sent_when_no_phone_is_known(tmp_path, monkeypatch):
     invite_service.notify_joined("@boss:x")
     time.sleep(0.1)
     assert sent == []
+
+
+# ---- "someone changed their name" -------------------------------------------
+
+
+def test_the_renamed_wake_up_names_nobody():
+    data = wake_data({"kind": "renamed", "counts": {"unread": 1}, "user": "@x:y"})
+    assert data == {"unread": "1", "kind": "renamed"}
+    message = fcm_message("tok", data, "com.dartvejder.dartchat.ios")["message"]
+    assert message["apns"]["payload"]["aps"]["alert"]["body"] == (
+        "Someone changed their name"
+    )
+    assert message["apns"]["headers"]["apns-collapse-id"] == "dartchat-renamed"
+
+
+def _renames(tmp_path, monkeypatch):
+    store = _use_store(tmp_path, monkeypatch)
+    store.data["owners"] = ["@boss:x"]
+    store.data["owner_phones"] = {"@boss:x": [{"pushkey": "p", "app_id": "a"}]}
+    sent = []
+    monkeypatch.setattr(
+        invite_service,
+        "http_json",
+        lambda method, url, body=None, **k: sent.append(body) or (200, {}),
+    )
+    return store, sent
+
+
+def _wait(sent):
+    for _ in range(50):
+        if sent:
+            break
+        time.sleep(0.02)
+
+
+def test_a_changed_name_is_remembered_and_the_owner_is_told(tmp_path, monkeypatch):
+    store, sent = _renames(tmp_path, monkeypatch)
+    invite_service.note_rename("@ana:x", "Anka", " Anchi ")
+    _wait(sent)
+    assert store.data["renames"]["@ana:x"]["from"] == "Anka"
+    assert [body["notification"]["kind"] for body in sent] == ["renamed"]
+    # The notice itself carries neither name.
+    assert "Anka" not in str(sent) and "Anchi" not in str(sent)
+
+
+def test_first_names_same_names_and_the_owner_are_not_news(tmp_path, monkeypatch):
+    store, sent = _renames(tmp_path, monkeypatch)
+    invite_service.note_rename("@ana:x", "", "Ana")
+    invite_service.note_rename("@ana:x", "Ana", "Ana ")
+    invite_service.note_rename("@ana:x", "ana", "Ana Banana")
+    invite_service.note_rename("@boss:x", "Boss", "Big boss")
+    time.sleep(0.1)
+    assert sent == [] and "renames" not in store.data

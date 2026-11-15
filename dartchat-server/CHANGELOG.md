@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0
+
+- When someone changes their display name, the owner's phones get a notice. Like every notice it names nobody; the owner's accounts list in the app shows the new name and the one before it. A person's first name and the owner's own changes are not reported.
+
 ## 0.10.1
 
 - Ready for the Dart Chat web version: the server now answers browsers on another address (such as web.dartchat.trade) for sign-in, sign-up, invitations, circles, groups and the bot, as it already did for plain chat traffic.

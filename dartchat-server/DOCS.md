@@ -72,6 +72,8 @@ the sender and the chat name never leave your server unencrypted.
 
 The owner also gets a "Someone you invited has joined" notification when an invited friend creates their account. It names nobody; the app shows who it was under Invitations and accounts. It reaches the phones on which the owner has opened that screen.
 
+The same phones get a "Someone changed their name" notification when a person changes their display name. It names nobody either; the accounts list shows the new name and the one before it. The first name a person sets in place of their username is not reported.
+
 To turn notifications on:
 
 1. In the Firebase console open **Project settings**, then **Service accounts**,

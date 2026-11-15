@@ -235,11 +235,18 @@ def remember_phones(user_id, token):
 
 
 def notify_joined(inviter):
-    """Wakes the inviting owner's phones with a "someone joined" notice.
+    """Wakes the inviting owner's phones with a "someone joined" notice."""
+    notify_owner("joined", inviter)
+
+
+def notify_owner(what, owner=None):
+    """Wakes an owner's phones with a "joined" or "renamed" notice.
 
     Like every wake-up, it names nobody: the phone shows a fixed text and
-    the owner looks up who it was in the app.
+    the owner looks up who it was in the app. Without [owner], or when that
+    owner has no known phone, every owner's phones are woken.
     """
+    inviter = owner
     with store.lock:
         known = store.data.get("owner_phones", {})
         phones = list(known.get(inviter) or [])
@@ -255,16 +262,16 @@ def notify_joined(inviter):
                 PUSH_URL,
                 {
                     "notification": {
-                        "kind": "joined",
+                        "kind": what,
                         "counts": {"unread": 1},
                         "devices": phones,
                     }
                 },
             )
             if status != 200:
-                log(f"The joined notice was not sent (status {status})")
+                log(f"The {what} notice was not sent (status {status})")
         except (urllib.error.URLError, OSError) as error:
-            log(f"The joined notice was not sent: {error}")
+            log(f"The {what} notice was not sent: {error}")
 
     threading.Thread(target=send, daemon=True).start()
 
@@ -518,17 +525,53 @@ def list_users(handler, body):
     admins = set(members.get("joined", {})) if status == 200 else {user_id}
     with store.lock:
         deactivated = set(store.data["deactivated"])
+        renames = dict(store.data.get("renames", {}))
     users = [
         {
             "user_id": name,
             "admin": name in admins,
             "you": name == user_id,
             "deactivated": name in deactivated,
+            # The name this person showed before they last changed it.
+            **({"renamed": renames[name]} if name in renames else {}),
         }
         for name in names
         if name not in (bot, BOT_USER)
     ]
     return {"users": users}
+
+
+def current_display_name(user_id, token):
+    try:
+        status, body = chat(
+            "GET", f"/profile/{quote(user_id)}/displayname", token=token
+        )
+    except ApiError:
+        return ""
+    name = body.get("displayname") if status == 200 else ""
+    return name.strip() if isinstance(name, str) else ""
+
+
+def note_rename(user_id, before, after):
+    """Remembers a changed display name and tells the owners' phones.
+
+    The first name someone sets (until then it is empty or their username),
+    and a change by an owner, are not news. Only the owner's accounts list
+    ever shows the old name.
+    """
+    after = after.strip()
+    username = user_id[1:].split(":")[0]
+    if not before or before == after or before.lower() == username.lower():
+        return
+    with store.lock:
+        if user_id in store.data["owners"]:
+            return
+        store.data.setdefault("renames", {})[user_id] = {
+            "from": before[:200],
+            "at": int(time.time() * 1000),
+        }
+        store.save()
+    notify_owner("renamed")
 
 
 def deactivate_user(handler, body):
@@ -869,6 +912,19 @@ def guard(handler, match, raw):
         target = urllib.parse.unquote(match["profile"])
         if not may_see(user_id, token, target):
             return as_json(*NOT_FOUND)
+    elif (
+        match["profile"]
+        and method == "PUT"
+        and body is not None
+        and urllib.parse.unquote(match["profile"]) == user_id
+        and handler.path.split("?")[0].rstrip("/").endswith("/displayname")
+        and isinstance(body.get("displayname"), str)
+    ):
+        before = current_display_name(user_id, token)
+        status, data, kind = forward(handler, raw)
+        if status == 200:
+            note_rename(user_id, before, body["displayname"])
+        return status, data, kind
     elif match["presence"] and method == "GET":
         target = urllib.parse.unquote(match["presence"])
         if not may_see(user_id, token, target):

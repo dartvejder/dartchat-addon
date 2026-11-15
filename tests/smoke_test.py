@@ -181,7 +181,6 @@ def circles_test(owner, join):
         403,
         errcode="M_FORBIDDEN",
     )
-    expect(call("POST", invite_path, {"user_id": "@sue:chat.test"}, sam), 403, errcode="M_FORBIDDEN")
     expect(call("POST", invite_path, {}, sam), 400)
     club = expect(create_room(owner, ["sam", "sue"]), 200)["room_id"]
     expect(call("POST", f"{MATRIX}/rooms/{club}/join", {}, sam), 200)

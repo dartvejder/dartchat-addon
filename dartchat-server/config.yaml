@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.2.0"
+version: "0.3.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -19,11 +19,17 @@ options:
   server_name: ""
   registration_token: ""
   firebase_service_account: ""
+  resend_api_key: ""
+  invite_email_from: ""
+  app_link: ""
   max_upload_mb: 20
   log_level: info
 schema:
   server_name: str
   registration_token: password?
   firebase_service_account: password?
+  resend_api_key: password?
+  invite_email_from: str?
+  app_link: str?
   max_upload_mb: int(1,100)
   log_level: list(error|warn|info|debug)

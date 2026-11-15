@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Fix: updating to 0.8.0 with `storage_report_email` left empty was refused by Home Assistant. An empty address now simply turns the email off.
+
 ## 0.8.0
 
 - Daily storage email: set `storage_report_email` and the server emails you every day (at `storage_report_time`, default 08:00) how much space Dart Chat uses (photos and files, database, other), how much is free on the disk, how much it grew per day, month and year, and how many messages were sent in each group and in private chats overall. See "Daily storage email" in the documentation.

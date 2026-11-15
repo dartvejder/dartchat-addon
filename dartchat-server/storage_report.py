@@ -447,6 +447,9 @@ def main():
     except Exception:
         log(f"Unknown timezone '{TIMEZONE}', using Europe/Belgrade")
         tz = ZoneInfo("Europe/Belgrade")
+    if TO and ("@" not in TO or " " in TO):
+        log("storage_report_email does not look like an email address; email is off")
+        globals()["TO"] = ""
     if not TO:
         log("Daily storage email is off (set storage_report_email); still recording sizes")
     elif not RESEND_KEY:

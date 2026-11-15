@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1
+
+- Group rules: after the server app restarted, the bot no longer knew which groups it was in. Changing a group's rules then failed with "Only a group admin can add the group bot", and the bot stayed silent in its groups until someone joined or left. It now reloads its groups on every start and asks the chat server which groups it is in.
+
 ## 0.11.0
 
 - When someone changes their display name, the owner's phones get a notice. Like every notice it names nobody; the owner's accounts list in the app shows the new name and the one before it. A person's first name and the owner's own changes are not reported.

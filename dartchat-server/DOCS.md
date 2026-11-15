@@ -158,6 +158,22 @@ from the moment it joins. It keeps only links, headlines and counts in
 `/data/group_bot`, never message text. If you delete a message, its links stop
 counting as the first post.
 
+## Timed bans and mutes
+
+The owner can ban or mute someone in a group for a while, from the app or by
+telling the group bot (`!ban @name 1d`, `!mute @name 2h`, `!unban @name`,
+`!unmute @name`; the length is a number with m, h, d or w). Nobody else can.
+
+- A mute is kept by this server: while it lasts, that person's messages in
+  that group are refused. They can still read.
+- A ban is an ordinary ban on the chat server. When the time is up, this
+  server lifts it and invites the person back.
+- To lift a ban while the owner's phone is off, the server keeps the owner's
+  most recent sign-in in `/data/moderation.json`, which is part of Home
+  Assistant backups. If the owner has signed out everywhere when the time
+  comes, the ban stays until the owner lifts it in the app.
+- The owner and the bot cannot be banned or muted this way.
+
 ## Scheduled messages
 
 Someone can write a message now and have it sent later. Their phone encrypts

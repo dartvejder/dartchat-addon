@@ -296,6 +296,78 @@ def scheduled_test(owner):
     expect(call("GET", path, token=owner), 200, scheduled=[])
 
 
+def moderation_test(owner, friend, friend_id):
+    """Only the owner bans or mutes for a while, and it ends by itself.
+    The test server counts a "minute" as one second."""
+    path = INVITE + "/moderation"
+    room = expect(
+        call("POST", MATRIX + "/createRoom", {"name": "Rules", "invite": [friend_id]}, owner),
+        200,
+    )["room_id"]
+    expect(call("POST", f"{MATRIX}/rooms/{room}/join", {}, friend), 200)
+
+    def say(token, text):
+        txn = f"m{time.time_ns()}"
+        body = {"msgtype": "m.text", "body": text}
+        return call("PUT", f"{MATRIX}/rooms/{room}/send/m.room.message/{txn}", body, token)
+
+    def membership():
+        state = call("GET", f"{MATRIX}/rooms/{room}/state/m.room.member/{friend_id}", token=owner)
+        return expect(state, 200)["membership"]
+
+    expect(say(friend, "hello"), 200)
+    expect(call("GET", path), 401)
+    expect(call("GET", path, token=friend), 200, mine=[])
+    mute = {"room_id": room, "user_id": friend_id, "kind": "mute", "minutes": 600}
+    # Not for friends, not for the owner as a target, not for nonsense.
+    expect(call("POST", path, mute, friend), 403)
+    expect(call("POST", path, dict(mute, user_id="@boss:chat.test"), owner), 400)
+    expect(call("POST", path, dict(mute, minutes=0), owner), 400)
+    expect(call("POST", path, dict(mute, kind="shout"), owner), 400)
+    expect(call("POST", path, dict(mute, user_id="@ghost:chat.test"), owner), 404)
+
+    muted = expect(call("POST", path, mute, owner), 200)
+    assert muted["kind"] == "mute" and muted["room_name"] == "Rules", muted
+    expect(say(friend, "still here"), 403, errcode="DARTCHAT_MUTED")
+    expect(say(owner, "quiet now"), 200)
+    mine = expect(call("GET", path, token=friend), 200)
+    assert [e["id"] for e in mine["mine"]] == [muted["id"]] and "all" not in mine, mine
+    assert "user_id" not in mine["mine"][0], mine
+    everything = expect(call("GET", path, token=owner), 200)["all"]
+    assert [e["user_id"] for e in everything] == [friend_id], everything
+    expect(call("DELETE", f"{path}/{muted['id']}", token=friend), 403)
+    expect(call("DELETE", f"{path}/{muted['id']}", token=owner), 200)
+    expect(say(friend, "back"), 200)
+
+    # A short mute ends by itself.
+    expect(call("POST", path, dict(mute, minutes=3), owner), 200)
+    expect(say(friend, "no"), 403)
+    for _ in range(20):
+        if say(friend, "yes")[0] == 200:
+            break
+        time.sleep(1)
+    expect(say(friend, "yes again"), 200)
+
+    # A ban is lifted on time and the person is invited back.
+    ban = expect(call("POST", path, dict(mute, kind="ban", minutes=4), owner), 200)
+    assert membership() == "ban", membership()
+    expect(say(friend, "banned"), 403)
+    assert [e["id"] for e in expect(call("GET", path, token=friend), 200)["mine"]] == [ban["id"]]
+    for _ in range(30):
+        if membership() == "invite":
+            break
+        time.sleep(1)
+    assert membership() == "invite", membership()
+    expect(call("GET", path, token=friend), 200, mine=[])
+    expect(call("POST", f"{MATRIX}/rooms/{room}/join", {}, friend), 200)
+
+    # The owner can lift a ban early.
+    ban = expect(call("POST", path, dict(mute, kind="ban", minutes=600), owner), 200)
+    assert membership() == "ban", membership()
+    expect(call("DELETE", f"{path}/{ban['id']}", token=owner), 200)
+    assert membership() == "invite", membership()
+
+
 def main():
     server = HTTPServer(("127.0.0.1", 6190), FakeResend)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -368,6 +440,11 @@ def main():
         call("POST", INVITE + "/admin/invites", {"email": "lena@example.com"}, owner), 200
     )
     expect(join(lena["code"], "lena", "lena-password-1"), 200)
+    moderation_test(
+        owner,
+        expect(login("lena", "lena-password-1"), 200)["access_token"],
+        "@lena:chat.test",
+    )
     bot = expect(
         call("POST", INVITE + "/admin/invites", {"email": "bot@example.com"}, owner), 200
     )

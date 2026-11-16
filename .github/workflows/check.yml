@@ -10,15 +10,32 @@ permissions:
 
 jobs:
   smoke-test:
-    runs-on: ubuntu-latest
+    # The owner's own PC: Ubuntu in WSL with Docker (self-hosted runner
+    # "barcodeDesktop-wsl"). GitHub starts nothing on its own machines once
+    # the monthly minutes are used up. The PC must be on and logged in.
+    runs-on: [self-hosted, Linux, dartchat-pc]
     timeout-minutes: 15
     steps:
+      # The PC keeps its files between runs: remove what the last run's
+      # server left (owned by root) and the server itself, if still there.
+      - name: Clean up after the last run
+        run: |
+          docker rm -f server >/dev/null 2>&1 || true
+          sudo rm -rf "$GITHUB_WORKSPACE/data"
+
       - uses: actions/checkout@v4
 
       - name: Check the scripts
         run: |
           sh -n dartchat-server/run.sh
           python3 -m py_compile dartchat-server/*.py tests/*.py
+
+      # Ubuntu's own Python refuses system-wide installs, so the packages go
+      # into a virtual environment that the later steps use too.
+      - name: Python packages
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Unit tests for the group bot
         run: |
@@ -62,3 +79,9 @@ jobs:
       - name: Server log
         if: always()
         run: docker logs server 2>&1 | grep -v memory_serve | tail -80
+
+      - name: Stop the server
+        if: always()
+        run: |
+          docker rm -f server >/dev/null 2>&1 || true
+          sudo rm -rf data

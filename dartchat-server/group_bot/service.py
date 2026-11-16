@@ -100,6 +100,9 @@ class Service:
         # Recent event id -> (name, text) in bridged groups, to show what a
         # reply answers on the Signal side.
         self.bridged: dict[str, tuple[str, str]] = {}
+        # Signal message (its timestamp) -> [(room_id, event_id, quote)] of our copies,
+        # so an edit in Signal can edit them.
+        self.from_signal_ids: dict[str, list] = {}
 
     # -- talking to the chat server directly (not through the front door) --------
     async def chat(self, method, path, body=None, token=None):
@@ -182,8 +185,12 @@ class Service:
             return
         content = event.source.get("content", {})
         relates = content.get("m.relates_to") or {}
-        if relates.get("rel_type") == "m.replace" or content.get("msgtype") == "m.notice":
-            return  # edits and other bots' notices
+        if relates.get("rel_type") == "m.replace":
+            if self.bridge_on(room.room_id):
+                await self.edit_to_signal(room, event, content, relates.get("event_id"))
+            return  # edits are not checked for reposts
+        if content.get("msgtype") == "m.notice":
+            return  # other bots' notices
         reply_to = (relates.get("m.in_reply_to") or {}).get("event_id")
         message = Message(
             room_id=room.room_id, event_id=event.event_id, sender=event.sender,
@@ -232,8 +239,21 @@ class Service:
             text = core_without_quote(message.body).strip()
             if not text:
                 return
-            self.outbox.add(name, text, quote=quote)
+            self.outbox.add(name, text, quote=quote, event_id=message.event_id)
             self.remember_bridged(message.event_id, name, text)
+
+    async def edit_to_signal(self, room, event, content: dict, original: str | None) -> None:
+        """Someone edited a message in a bridged group: pass the new text on."""
+        new = content.get("m.new_content") or {}
+        text = (new.get("body") if isinstance(new, dict) else None) or content.get("body") or ""
+        if not new and text.startswith("* "):
+            text = text[2:]
+        text = core_without_quote(text).strip()
+        if not text or not original:
+            return
+        name = room.user_name(event.sender) or event.sender[1:].split(":")[0]
+        self.outbox.add(name, text, edit_of=original)
+        self.remember_bridged(original, name, text)
 
     def remember_bridged(self, event_id: str, name: str, text: str) -> None:
         if len(self.bridged) > 2000:
@@ -296,6 +316,9 @@ class Service:
             return 0
         name = str(body.get("name") or "Signal")[:80]
         text = str(body.get("text") or "")
+        if body.get("edit_of") is not None:
+            return await self.edit_from_signal(rooms, str(body["edit_of"]), name, text)
+        signal_id = str(body["signal_ts"]) if body.get("signal_ts") is not None else None
         quote_ = body.get("quote") if isinstance(body.get("quote"), dict) else None
         pictures = []
         for image in (body.get("images") or [])[:10]:
@@ -316,6 +339,8 @@ class Service:
             sent = bool(event_id)
             if event_id:
                 self.remember_bridged(event_id, name, text or "📷")
+                if signal_id:
+                    self.remember_signal(signal_id, room_id, event_id, quote_)
             for data, image in pictures:
                 mime = str(image.get("mime") or "image/jpeg")
                 filename = str(image.get("filename") or "photo.jpg")[:120]
@@ -337,6 +362,35 @@ class Service:
                 sent = sent and bool(event_id)
             delivered += sent
         return delivered
+
+    def remember_signal(self, signal_id: str, room_id: str, event_id: str, quote_) -> None:
+        if len(self.from_signal_ids) > 2000:
+            self.from_signal_ids.clear()
+        self.from_signal_ids.setdefault(signal_id, []).append((room_id, event_id, quote_))
+
+    async def edit_from_signal(self, rooms: list[str], signal_id: str, name: str,
+                               text: str) -> int:
+        """A Signal message was edited: edit our copy of it in each group."""
+        if not text.strip():
+            return 0
+        known = {room: (event_id, quote_)
+                 for room, event_id, quote_ in self.from_signal_ids.get(signal_id, [])}
+        done = 0
+        for room_id in rooms:
+            if room_id in known:
+                event_id, quote_ = known[room_id]
+                caption = bridge.signal_text(name, text, quote_)
+                ok = await self.post(room_id, {
+                    "msgtype": "m.text", "body": f"* {caption}",
+                    "m.new_content": {"msgtype": "m.text", "body": caption},
+                    "m.relates_to": {"rel_type": "m.replace", "event_id": event_id}})
+                if ok:
+                    self.remember_bridged(event_id, name, text)
+            else:  # sent before this bot last started: post the new text instead
+                ok = await self.post(room_id, {"msgtype": "m.text",
+                                               "body": f"✏️ {name}: {text}"})
+            done += bool(ok)
+        return done
 
     async def post(self, room_id: str, content: dict) -> str | None:
         content["dartchat.bridge"] = {"from": "signal"}

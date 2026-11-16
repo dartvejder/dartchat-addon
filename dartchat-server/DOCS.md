@@ -182,7 +182,8 @@ running on the same Home Assistant.
 Text and photos pass both ways. A message from Signal is posted in the group
 by the group bot as "Name: message"; a message from Dart Chat is posted in the
 Signal group by the Signal bot the same way. Replies show the message they
-answer above them. Reactions, edits and deletions are not passed on.
+answer above them, and edits are passed on both ways. Reactions and deletions
+are not passed on.
 
 To stop it quickly, switch **Bridge to Signal** off in the app, or switch
 `dartchat_bridge` off in the Signal bot. The bridge listens on port 6170 only

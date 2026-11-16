@@ -198,6 +198,20 @@ async def check_bridge(http, clients, owner, friend, room_id, path):
                 == "Signal Marko: stiže!"]
     await until(clients, edited, "the edit from Signal")
 
+    # A phone signed in after the bot's key went out still reads its messages.
+    with tempfile.TemporaryDirectory() as folder:
+        phone = await sign_in(FRIEND, FRIEND_PASSWORD, folder)
+        await step([phone] + clients)
+        await asyncio.sleep(3)
+        await step([phone] + clients)
+        status, body = await bridge_api(http, "POST", "/inbox", body={
+            "name": "Signal Marko", "text": "novi telefon"})
+        assert status == 200 and body["delivered"] == 1, (status, body)
+        await until([phone] + clients, lambda: any(
+            r == room_id and isinstance(e, RoomMessageText) and e.body == "Signal Marko: novi telefon"
+            for r, e in phone.messages), "the new phone to read the bot")
+        await phone.close()
+
     # Switched off: nothing passes either way.
     status, body = await api(http, "PUT", path, owner.access_token,
                              {"rules": {"commands": True}})

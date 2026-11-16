@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.2
+
+- Group bot: phones no longer show "Waiting for this message" for the bot's messages. When handing out the key to its messages failed for some phones (for example while the chat server was restarting), the bot thought it was done; phones signed in later never got the key either. Before each message it now checks that every phone in the group has the key and hands it out again where it is missing. It also answers a phone that asks for the key of one of its earlier messages.
+
 ## 0.14.1
 
 - Bridge to Signal: edits pass both ways. Editing a message in the Dart Chat group edits the copy in Signal, and an edit in Signal edits the copy in Dart Chat. An edit of a message sent before the last restart is posted as a new message marked ✏️.

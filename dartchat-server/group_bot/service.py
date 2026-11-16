@@ -33,6 +33,7 @@ from nio import (
     MegolmEvent,
     RedactionEvent,
     RoomEncryptedImage,
+    RoomKeyRequest,
     RoomMessageImage,
     RoomMessageText,
 )
@@ -395,6 +396,7 @@ class Service:
     async def post(self, room_id: str, content: dict) -> str | None:
         content["dartchat.bridge"] = {"from": "signal"}
         try:
+            await self.ensure_keys_shared(room_id)
             response = await self.client.room_send(room_id, "m.room.message", content,
                                                    ignore_unverified_devices=True)
             return getattr(response, "event_id", None)
@@ -495,6 +497,7 @@ class Service:
             self.first_sync = True
             return False
         try:
+            await self.ensure_keys_shared(room_id)
             response = await self.client.room_send(room_id, "m.room.message", content,
                                                    ignore_unverified_devices=True)
             if getattr(response, "event_id", None):
@@ -503,6 +506,99 @@ class Service:
         except Exception as e:
             log.warning("could not send: %r", e)
         return False
+
+    # -- making sure every phone gets the key to the bot's messages ----------------
+    def unshared_devices(self, room) -> set[tuple[str, str]]:
+        """Devices in the group that don't have the key of the bot's current
+        message session (for example because the chat server was restarting
+        when the key was sent, or because someone signed in on a new phone)."""
+        olm = self.client.olm
+        session = olm.outbound_group_sessions.get(room.room_id)
+        if session is None or session.expired:
+            return set()  # a new session is shared with everyone anyway
+        done = session.users_shared_with | session.users_ignored
+        return {(user, device.id)
+                for user in room.users
+                for device in olm.device_store.active_user_devices(user)
+                if device.id != self.client.device_id
+                and (user, device.id) not in done
+                and not olm.is_device_blacklisted(device)}
+
+    async def ensure_keys_shared(self, room_id: str) -> None:
+        """nio marks a message key as handed out even when sending it to some
+        phones failed; those phones then show "Waiting for this message" for
+        everything the bot writes. Hand the key again to whoever lacks it."""
+        client = self.client
+        room = client.rooms.get(room_id) if client else None
+        if not room or not getattr(room, "encrypted", False) or not getattr(client, "olm", None):
+            return
+        if client.should_query_keys:
+            await client.keys_query()
+        missing: set = set()
+        for attempt in range(3):
+            missing = self.unshared_devices(room)
+            if not missing:
+                return
+            if attempt:
+                await asyncio.sleep(2 * attempt)
+            client.olm.outbound_group_sessions[room_id].shared = False
+            waiting = client.sharing_session.get(room_id)
+            if waiting:
+                await waiting.wait()
+                continue
+            try:
+                await client.share_group_session(room_id, ignore_unverified_devices=True)
+            except Exception as error:
+                log.warning("could not hand out the message key: %r", error)
+        missing = self.unshared_devices(room)
+        if missing:
+            log.warning("%d device(s) in a group still lack the message key", len(missing))
+
+    async def answer_key_requests(self, response) -> None:
+        """A phone that missed the key of one of the bot's messages asks for
+        it. nio only answers the bot's own devices, so answer group members'
+        phones here: only for keys the bot made itself, and only for people
+        who are in that group now."""
+        olm = self.client.olm if self.client else None
+        if not olm:
+            return
+        own_key = olm.account.identity_keys["curve25519"]
+        for event in getattr(response, "to_device_events", []) or []:
+            if not isinstance(event, RoomKeyRequest) or event.sender == self.user_id:
+                continue
+            room = self.client.rooms.get(event.room_id)
+            # Newer apps leave out sender_key; the bot only hands out its own keys.
+            if (not room or event.sender not in room.users
+                    or not self.rules.active(event.room_id)
+                    or (event.sender_key or own_key) != own_key):
+                continue
+            try:
+                await self.forward_key(event, own_key)
+            except Exception as error:
+                log.warning("could not answer a key request: %r", error)
+
+    async def forward_key(self, event, sender_key: str) -> None:
+        olm = self.client.olm
+        session = olm.inbound_group_store.get(event.room_id, sender_key, event.session_id)
+        if session is None:
+            return
+        device = olm.device_store[event.sender].get(event.requesting_device_id) \
+            if event.sender in olm.device_store.users else None
+        if device is None:
+            await self.client.keys_query()
+            device = olm.device_store[event.sender].get(event.requesting_device_id) \
+                if event.sender in olm.device_store.users else None
+        if device is None or device.deleted or olm.is_device_blacklisted(device):
+            return
+        olm_session = olm.session_store.get(device.curve25519)
+        if olm_session is None:
+            await self.client.keys_claim({event.sender: [device.id]})
+            olm_session = olm.session_store.get(device.curve25519)
+        if olm_session is None:
+            return
+        message = olm._encrypt_forwarding_key(event.room_id, session, olm_session, device)
+        await self.client.to_device(message)
+        log.info("gave a phone the key to an earlier bot message")
 
     def members(self, room_id: str) -> dict[str, str]:
         """Who is in a group, with the name they show there."""
@@ -522,6 +618,7 @@ class Service:
                 response = await self.client.sync(timeout=30000, full_state=self.first_sync)
                 if hasattr(response, "next_batch"):
                     self.first_sync = False
+                    await self.answer_key_requests(response)
                     if self.client.should_upload_keys:
                         await self.client.keys_upload()
                     if self.client.should_query_keys:

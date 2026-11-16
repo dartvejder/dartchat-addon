@@ -151,7 +151,7 @@ async def check_bridge(http, clients, owner, friend, room_id, path):
 
     # Signal to Dart Chat: the owner's app reads it like any message.
     status, body = await bridge_api(http, "POST", "/inbox", body={
-        "name": "Signal Marko", "text": "stiže",
+        "name": "Signal Marko", "text": "stiže", "signal_ts": 777,
         "images": [{"data": base64.b64encode(PICTURE).decode(), "mime": "image/png",
                     "filename": "s.png"}]})
     assert status == 200 and body["delivered"] == 1, (status, body)
@@ -171,6 +171,32 @@ async def check_bridge(http, clients, owner, friend, room_id, path):
         data = attachments.decrypt_attachment(await r.read(), image.key["k"],
                                               image.hashes["sha256"], image.iv)
     assert data == PICTURE
+
+    # Edits pass both ways.
+    status, body = await bridge_api(http, "GET", "/outbox?wait=0")
+    cursor = body["last"]
+    text_id = items[0]["event_id"]
+    await friend.room_send(room_id, "m.room.message", {
+        "msgtype": "m.text", "body": "* most radi!",
+        "m.new_content": {"msgtype": "m.text", "body": "most radi!"},
+        "m.relates_to": {"rel_type": "m.replace", "event_id": text_id}},
+        ignore_unverified_devices=True)
+    edits = []
+    deadline = time.time() + 60
+    while not edits and time.time() < deadline:
+        await step(clients, 0.5)
+        status, body = await bridge_api(http, "GET", f"/outbox?after={cursor}&wait=2")
+        edits = body["items"]
+    assert [(i["text"], i.get("edit_of")) for i in edits] == [("most radi!", text_id)], edits
+    status, body = await bridge_api(http, "POST", "/inbox", body={
+        "name": "Signal Marko", "text": "stiže!", "edit_of": 777})
+    assert status == 200 and body["delivered"] == 1, (status, body)
+
+    def edited():
+        return [e for r, e in owner.messages if r == room_id and isinstance(e, RoomMessageText)
+                and (e.source["content"].get("m.new_content") or {}).get("body")
+                == "Signal Marko: stiže!"]
+    await until(clients, edited, "the edit from Signal")
 
     # Switched off: nothing passes either way.
     status, body = await api(http, "PUT", path, owner.access_token,

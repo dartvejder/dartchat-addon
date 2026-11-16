@@ -39,6 +39,7 @@ def make_service(tmp_path, token=TOKEN, on=True):
         svc.rules.set(ROOM, {"signal_bridge": True})
     svc.outbox = bridge.Outbox()
     svc.bridged = {}
+    svc.from_signal_ids = {}
     svc.client = FakeClient()
     svc.bot = SimpleNamespace(ready=True)
     uploads = []
@@ -189,3 +190,40 @@ def test_outbox_endpoint(tmp_path):
     assert answer["last"] == 1
     status, answer = call(svc, "get", "/_dartchat/v1/bridge/outbox?after=1&wait=0")
     assert answer["items"] == []
+
+
+class FakeRoom:
+    def user_name(self, user):
+        return {"@ana:t": "Ana"}.get(user)
+
+
+def test_dart_edit_goes_to_signal(tmp_path):
+    svc = make_service(tmp_path)
+    event = SimpleNamespace(sender="@ana:t", source={})
+
+    async def go():
+        await svc.to_signal(None, text_event("ideš"), message("ideš", 1), None)
+        await svc.edit_to_signal(FakeRoom(), event, {
+            "body": "* ideš?", "m.new_content": {"msgtype": "m.text", "body": "ideš?"},
+            "m.relates_to": {"rel_type": "m.replace", "event_id": "$e1"}}, "$e1")
+    asyncio.run(go())
+    first, edit = svc.outbox.after(0)
+    assert first["event_id"] == "$e1" and "edit_of" not in first
+    assert (edit["name"], edit["text"], edit["edit_of"]) == ("Ana", "ideš?", "$e1")
+
+
+def test_signal_edit_edits_our_copy(tmp_path):
+    svc = make_service(tmp_path)
+
+    async def go():
+        assert await svc.from_signal({"name": "Marko", "text": "zdrvo", "signal_ts": 555}) == 1
+        assert await svc.from_signal({"name": "Marko", "text": "zdravo", "edit_of": 555}) == 1
+        # An edit of a message this bot doesn't know: posted as a new message.
+        assert await svc.from_signal({"name": "Marko", "text": "x", "edit_of": 1}) == 1
+    asyncio.run(go())
+    (_, original), (_, edit), (_, unknown) = svc.client.sent
+    assert original["body"] == "Marko: zdrvo"
+    assert edit["m.relates_to"] == {"rel_type": "m.replace", "event_id": "$sent1"}
+    assert edit["m.new_content"]["body"] == "Marko: zdravo"
+    assert edit["body"] == "* Marko: zdravo"
+    assert unknown["body"] == "✏️ Marko: x"

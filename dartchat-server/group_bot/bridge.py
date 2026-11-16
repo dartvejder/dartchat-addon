@@ -6,11 +6,13 @@ password (the `signal_bridge_token` option on both add-ons):
 
   GET  /_dartchat/v1/bridge/outbox?after=N&wait=25
        Messages from Dart Chat groups with the "Bridge to Signal" rule on,
-       newer than N. Waits up to `wait` seconds for one to arrive.
+       newer than N. Waits up to `wait` seconds for one to arrive. A text item
+       has its "event_id"; an edit has "edit_of": the event id it changes.
   POST /_dartchat/v1/bridge/inbox
        A message from the Signal group, posted by the bot into every Dart
        Chat group with the rule on:
        {"name": "Marko", "text": "...", "quote": {"name": ..., "text": ...},
+        "signal_ts": 1700000000000,  (to match a later edit: "edit_of": that number)
         "images": [{"data": base64, "mime": "image/jpeg", "filename": ...,
                     "width": 800, "height": 600}]}
   GET  /_dartchat/v1/bridge/status
@@ -68,9 +70,14 @@ class Outbox:
         return sum(len((i.get("image") or {}).get("data", "")) for i in self.items)
 
     def add(self, name: str, text: str, image: dict | None = None,
-            quote: dict | None = None) -> dict:
+            quote: dict | None = None, event_id: str | None = None,
+            edit_of: str | None = None) -> dict:
         self.last = next(self.ids)
         item = {"id": self.last, "name": name, "text": text, "time": int(time.time())}
+        if event_id:
+            item["event_id"] = event_id  # so a later edit can find it
+        if edit_of:
+            item["edit_of"] = edit_of
         if image:
             item["image"] = image
         if quote:

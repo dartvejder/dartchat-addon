@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1
+
+- Bridge to Signal: edits pass both ways. Editing a message in the Dart Chat group edits the copy in Signal, and an edit in Signal edits the copy in Dart Chat. An edit of a message sent before the last restart is posted as a new message marked ✏️.
+
 ## 0.14.0
 
 - Group rules: a new rule, **Bridge to Signal**. With `signal_bridge_token` set here and in the Signal bot add-on, the group bot passes text and photos between a Dart Chat group and the Signal bot's group, both ways, as "Name: message". Switching the rule off in the app stops both directions at once.

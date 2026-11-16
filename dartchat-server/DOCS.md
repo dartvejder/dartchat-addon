@@ -154,6 +154,7 @@ end-to-end encrypted.
 | Commands | Answers `list_commands` (repeaters list), `stats_commands` (today's numbers), `top_commands` (today's top list) and `keyword_commands`. |
 | Midnight report | Right after midnight (`timezone`), posts the day's statistics and top list. |
 | Home Assistant sensors | Shows the group's numbers as sensors named after the group, for example `sensor.dartchat_drustvo_poruke_danas`. |
+| Birthdays | At `birthday_time` on a member's birthday, posts `birthday_text` (`{name}` is the person). People enter their own birthday, day and month only, in the app under My profile. Someone born on 29 February is congratulated on 28 February in other years. |
 
 In texts, `|` separates options picked at random, `{name}` and `{date}` are
 who posted the link first and when, and in score lines `{count}` and `{puta}`

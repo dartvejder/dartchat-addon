@@ -35,6 +35,7 @@ from nio import (
     RoomMessageText,
 )
 
+from .birthdays import Birthdays, valid as valid_birthday
 from .core import Bot, Message
 from . import moderation
 from .ha import HASensors
@@ -78,6 +79,9 @@ class Service:
         self.store = Store(os.path.join(DATA, "groups.sqlite3"))
         self.bot = Bot(self.settings, self.rules, self.store, self.send, http)
         self.bot.ready = False
+        self.birthdays = Birthdays(os.path.join(DATA, "birthdays.json"))
+        self.bot.birthdays = self.birthdays
+        self.bot.members = self.members
         self.client: AsyncClient | None = None
         self.user_id = f"@{USERNAME}:{SERVER_NAME}"
         self.admin_room_id: str | None = None
@@ -288,6 +292,14 @@ class Service:
             log.warning("could not send: %r", e)
         return False
 
+    def members(self, room_id: str) -> dict[str, str]:
+        """Who is in a group, with the name they show there."""
+        room = self.client.rooms.get(room_id) if self.client else None
+        if not room:
+            return {}
+        return {user: room.user_name(user) or user[1:].split(":")[0]
+                for user in room.users if user != self.user_id}
+
     def room_name(self, room_id: str) -> str:
         room = self.client.rooms.get(room_id) if self.client else None
         return room.display_name if room else ""
@@ -372,6 +384,41 @@ class Service:
             raise ApiError(403, "M_FORBIDDEN", "Only the server owner can do this.")
         request["joined_rooms"] = rooms
         return body["user_id"], token
+
+    # -- everyone's own birthday ---------------------------------------------------
+    async def require_user(self, request) -> str:
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer ") or len(header) < 8:
+            raise ApiError(401, "M_MISSING_TOKEN", "Sign in first.")
+        status, body = await self.chat("GET", "/account/whoami", token=header[7:].strip())
+        if status != 200 or "user_id" not in body:
+            raise ApiError(401, "M_UNKNOWN_TOKEN", "Sign in again.")
+        return body["user_id"]
+
+    def birthday_of(self, user: str) -> dict:
+        saved = self.birthdays.get(user)
+        return {"month": saved[0], "day": saved[1]} if saved else {}
+
+    async def api_get_birthday(self, request):
+        return self.birthday_of(await self.require_user(request))
+
+    async def api_put_birthday(self, request):
+        """{"month": 5, "day": 17} saves the birthday; {} removes it."""
+        user = await self.require_user(request)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise ApiError(400, "M_NOT_JSON", "Send the birthday as a JSON object.")
+        month, day = body.get("month"), body.get("day")
+        if month is None and day is None:
+            self.birthdays.remove(user)
+        elif valid_birthday(month, day):
+            self.birthdays.set(user, month, day)
+        else:
+            raise ApiError(400, "DARTCHAT_BAD_BIRTHDAY", "That is not a day of the year.")
+        return self.birthday_of(user)
 
     async def joined_rooms(self) -> set[str]:
         """The groups the bot is in, as the chat server has it."""
@@ -485,6 +532,8 @@ class Service:
         app = web.Application(client_max_size=16384)
         app.router.add_get(f"{PREFIX}/status", wrap(self.api_status))
         app.router.add_put(f"{PREFIX}/avatar", wrap(self.api_put_avatar))
+        app.router.add_get(f"{PREFIX}/birthday", wrap(self.api_get_birthday))
+        app.router.add_put(f"{PREFIX}/birthday", wrap(self.api_put_birthday))
         app.router.add_get(PREFIX + "/rooms/{room_id:" + ROOM_ID + "}", wrap(self.api_get_room))
         app.router.add_put(PREFIX + "/rooms/{room_id:" + ROOM_ID + "}", wrap(self.api_put_room))
         return app

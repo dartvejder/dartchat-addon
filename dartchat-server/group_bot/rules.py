@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 from zoneinfo import ZoneInfo
 
 from .news import keyword_stems
 
 # The rules the owner can switch on per group, in the order the app shows them.
-RULES = ("repost", "same_news", "keyword", "commands", "daily_report", "ha_sensors")
+RULES = ("repost", "same_news", "keyword", "commands", "daily_report", "ha_sensors",
+         "birthdays")
 
 
 def describe(settings: "Settings") -> list[dict]:
@@ -43,8 +45,17 @@ def describe(settings: "Settings") -> list[dict]:
          "description": "Right after midnight, post the day's statistics and top list."},
         {"id": "ha_sensors", "label": "Home Assistant sensors",
          "description": "Show this group's numbers for the day as sensors in Home Assistant."},
+        {"id": "birthdays", "label": "Birthdays",
+         "description": f"At {settings.birthday_time} on a member's birthday, post "
+                        f"“{fill_name(settings.birthday_texts[0])}”. People enter their "
+                        "own birthday in the app, under My profile."},
     ]
     return out
+
+
+def fill_name(template: str) -> str:
+    """The birthday text as an example, with a name in it."""
+    return template.replace("{name}", "Ana")
 
 
 def _split(value, default: str) -> list[str]:
@@ -94,6 +105,10 @@ class Settings:
         self.keyword_count_text = text("keyword_count_text", "{name}: {count}")
         self.keyword_commands = _commands(o.get("keyword_commands"), "!keyword")
         self.keyword_title = f"{self.keyword_name}:"
+        self.birthday_texts = _split(o.get("birthday_text"), "🎂 Srećan rođendan, {name}!")
+        time_text = text("birthday_time", "").strip()
+        match = re.fullmatch(r"([01]?[0-9]|2[0-3]):([0-5][0-9])", time_text)
+        self.birthday_time = f"{int(match[1]):02d}:{match[2]}" if match else "09:00"
         try:
             self.tz = ZoneInfo(text("timezone", "") or "Europe/Belgrade")
         except Exception:

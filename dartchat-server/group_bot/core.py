@@ -79,6 +79,10 @@ class Bot:
         self.sensors = None
         self.sensors_dirty = True
         self.ready = True
+        # Set by the service: the birthdays people entered, and a function
+        # room_id -> {user_id: name} for who is in a group.
+        self.birthdays = None
+        self.members = lambda room_id: {}
         self._titles: dict[str, str | None] = {}
 
     def local(self, ts_ms: int) -> datetime:
@@ -86,6 +90,10 @@ class Bot:
 
     def today(self) -> date:
         return datetime.now(self.cfg.tz).date()
+
+    def clock(self) -> str:
+        """The time of day in the owner's time zone, as "09:05"."""
+        return datetime.now(self.cfg.tz).strftime("%H:%M")
 
     def keyword_label(self, room_id: str) -> str:
         if self.cfg.keyword_stems and self.rules.on(room_id, "keyword"):
@@ -295,6 +303,29 @@ class Bot:
         log.error("midnight report: gave up sending")
         return False
 
+    async def congratulate(self, today: date) -> None:
+        """Once a day, at the chosen time, wishes a happy birthday in every
+        group with the birthdays rule that the person is a member of."""
+        if self.birthdays is None or not self.ready:
+            return
+        if self.clock() < self.cfg.birthday_time:
+            return
+        day = today.isoformat()
+        if self.stats.get_state("last_birthday_day") == day:
+            return
+        self.stats.set_state("last_birthday_day", day)
+        people = self.birthdays.on(today)
+        if not people:
+            return
+        for room in self.rules.active_rooms():
+            if not self.rules.on(room, "birthdays"):
+                continue
+            members = self.members(room)
+            for user in people:
+                if user in members:
+                    text = fill(random.choice(self.cfg.birthday_texts), name=members[user])
+                    await self.send_reliably(room, text)
+
     async def tick(self) -> None:
         """Called every ~30 s: midnight report and sensor refresh."""
         today = self.today()
@@ -316,6 +347,7 @@ class Bot:
                                         keyword_label=label)):
                     await self.send_reliably(room, text)
             self.sensors_dirty = True
+        await self.congratulate(today)
         if self.sensors and self.sensors_dirty:
             self.sensors_dirty = False
             rooms = [r for r in self.rules.active_rooms() if self.rules.on(r, "ha_sensors")]

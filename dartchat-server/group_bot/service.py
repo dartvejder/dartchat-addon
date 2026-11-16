@@ -385,32 +385,29 @@ class Service:
         request["joined_rooms"] = rooms
         return body["user_id"], token
 
-    # -- everyone's own birthday ---------------------------------------------------
-    async def require_user(self, request) -> str:
-        header = request.headers.get("Authorization", "")
-        if not header.startswith("Bearer ") or len(header) < 8:
-            raise ApiError(401, "M_MISSING_TOKEN", "Sign in first.")
-        status, body = await self.chat("GET", "/account/whoami", token=header[7:].strip())
-        if status != 200 or "user_id" not in body:
-            raise ApiError(401, "M_UNKNOWN_TOKEN", "Sign in again.")
-        return body["user_id"]
-
+    # -- birthdays: only the owner enters them, for everyone ------------------------
     def birthday_of(self, user: str) -> dict:
         saved = self.birthdays.get(user)
         return {"month": saved[0], "day": saved[1]} if saved else {}
 
-    async def api_get_birthday(self, request):
-        return self.birthday_of(await self.require_user(request))
+    async def api_get_birthdays(self, request):
+        await self.require_owner(request)
+        return {"birthdays": {user: {"month": day[0], "day": day[1]}
+                              for user, day in self.birthdays.all().items()}}
 
     async def api_put_birthday(self, request):
-        """{"month": 5, "day": 17} saves the birthday; {} removes it."""
-        user = await self.require_user(request)
+        """{"user_id": "@ana:…", "month": 5, "day": 17} saves that person's
+        birthday; without month and day it removes it."""
+        await self.require_owner(request)
         try:
             body = await request.json()
         except ValueError:
             body = None
         if not isinstance(body, dict):
             raise ApiError(400, "M_NOT_JSON", "Send the birthday as a JSON object.")
+        user = body.get("user_id")
+        if not isinstance(user, str) or not user.startswith("@") or ":" not in user:
+            raise ApiError(400, "M_INVALID_PARAM", "Say whose birthday it is.")
         month, day = body.get("month"), body.get("day")
         if month is None and day is None:
             self.birthdays.remove(user)
@@ -532,7 +529,7 @@ class Service:
         app = web.Application(client_max_size=16384)
         app.router.add_get(f"{PREFIX}/status", wrap(self.api_status))
         app.router.add_put(f"{PREFIX}/avatar", wrap(self.api_put_avatar))
-        app.router.add_get(f"{PREFIX}/birthday", wrap(self.api_get_birthday))
+        app.router.add_get(f"{PREFIX}/birthdays", wrap(self.api_get_birthdays))
         app.router.add_put(f"{PREFIX}/birthday", wrap(self.api_put_birthday))
         app.router.add_get(PREFIX + "/rooms/{room_id:" + ROOM_ID + "}", wrap(self.api_get_room))
         app.router.add_put(PREFIX + "/rooms/{room_id:" + ROOM_ID + "}", wrap(self.api_put_room))

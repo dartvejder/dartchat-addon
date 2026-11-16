@@ -1,4 +1,4 @@
-"""Birthdays people entered themselves: a day and a month, never a year.
+"""Birthdays the owner entered for people: a day and a month, never a year.
 
 Kept in a small JSON file as {user_id: [month, day]}. The bot congratulates
 in the groups where the owner switched the birthdays rule on.
@@ -42,6 +42,10 @@ class Birthdays:
     def get(self, user: str) -> tuple[int, int] | None:
         with self.lock:
             return self.days.get(user)
+
+    def all(self) -> dict[str, tuple[int, int]]:
+        with self.lock:
+            return dict(self.days)
 
     def set(self, user: str, month: int, day: int) -> None:
         with self.lock:

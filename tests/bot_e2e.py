@@ -106,20 +106,27 @@ async def main():
             bot_id = body["user_id"]
             assert [r["id"] for r in body["rules"]][:2] == ["repost", "same_news"], body
 
-            # Everyone keeps their own birthday, not only the owner.
-            status, body = await api(http, "GET", "/birthday", None)
+            # Only the owner enters birthdays, for everyone.
+            status, body = await api(http, "GET", "/birthdays", None)
             assert status == 401, (status, body)
-            status, body = await api(http, "GET", "/birthday", friend.access_token)
-            assert (status, body) == (200, {}), (status, body)
+            status, body = await api(http, "GET", "/birthdays", friend.access_token)
+            assert status == 403, (status, body)
             status, body = await api(http, "PUT", "/birthday", friend.access_token,
-                                     {"month": 2, "day": 30})
+                                     {"user_id": friend.user_id, "month": 5, "day": 17})
+            assert status == 403, (status, body)
+            status, body = await api(http, "PUT", "/birthday", owner.access_token,
+                                     {"user_id": friend.user_id, "month": 2, "day": 30})
             assert status == 400 and body["errcode"] == "DARTCHAT_BAD_BIRTHDAY", (status, body)
-            status, body = await api(http, "PUT", "/birthday", friend.access_token,
+            status, body = await api(http, "PUT", "/birthday", owner.access_token,
                                      {"month": 5, "day": 17})
+            assert status == 400, (status, body)
+            status, body = await api(http, "PUT", "/birthday", owner.access_token,
+                                     {"user_id": friend.user_id, "month": 5, "day": 17})
             assert (status, body) == (200, {"month": 5, "day": 17}), (status, body)
-            status, body = await api(http, "GET", "/birthday", owner.access_token)
-            assert (status, body) == (200, {}), (status, body)
-            status, body = await api(http, "PUT", "/birthday", friend.access_token, {})
+            status, body = await api(http, "GET", "/birthdays", owner.access_token)
+            assert (status, body) == (200, {"birthdays": {friend.user_id: {"month": 5, "day": 17}}}), (status, body)
+            status, body = await api(http, "PUT", "/birthday", owner.access_token,
+                                     {"user_id": friend.user_id})
             assert (status, body) == (200, {}), (status, body)
 
             room = await owner.room_create(

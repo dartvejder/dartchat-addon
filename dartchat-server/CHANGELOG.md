@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.0
+
+- Group rules: a new rule, **Bridge to Signal**. With `signal_bridge_token` set here and in the Signal bot add-on, the group bot passes text and photos between a Dart Chat group and the Signal bot's group, both ways, as "Name: message". Switching the rule off in the app stops both directions at once.
+
 ## 0.13.0
 
 - Group rules: a new rule, **Birthdays**. The owner enters the birthdays in the app (Admin, Accounts; day and month only, no year), for every member and for themselves. Members cannot change them. On that day, at `birthday_time`, the bot posts `birthday_text` in every group that has the rule on and that the person is a member of. Birthdays are kept on the server in `/data/group_bot/birthdays.json`; they are not end-to-end encrypted, and the app says so.

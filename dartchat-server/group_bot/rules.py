@@ -16,7 +16,7 @@ from .news import keyword_stems
 
 # The rules the owner can switch on per group, in the order the app shows them.
 RULES = ("repost", "same_news", "keyword", "commands", "daily_report", "ha_sensors",
-         "birthdays")
+         "birthdays", "signal_bridge")
 
 
 def describe(settings: "Settings") -> list[dict]:
@@ -50,6 +50,11 @@ def describe(settings: "Settings") -> list[dict]:
                         f"“{fill_name(settings.birthday_texts[0])}”. People enter their "
                         "own birthday in the app, under My profile."},
     ]
+    if settings.signal_bridge_token:
+        out.append({"id": "signal_bridge", "label": "Bridge to Signal",
+                    "description": "Pass every message and photo between this group and "
+                                   "the Signal group, both ways, as “Name: message”. "
+                                   "Switch off to stop it at once."})
     return out
 
 
@@ -105,6 +110,8 @@ class Settings:
         self.keyword_count_text = text("keyword_count_text", "{name}: {count}")
         self.keyword_commands = _commands(o.get("keyword_commands"), "!keyword")
         self.keyword_title = f"{self.keyword_name}:"
+        # Shared password with the Signal bot add-on; empty hides the bridge.
+        self.signal_bridge_token = text("signal_bridge_token", "").strip()
         self.birthday_texts = _split(o.get("birthday_text"), "🎂 Srećan rođendan, {name}!")
         time_text = text("birthday_time", "").strip()
         match = re.fullmatch(r"([01]?[0-9]|2[0-3]):([0-5][0-9])", time_text)

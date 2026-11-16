@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.13.0"
+version: "0.14.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -48,6 +48,7 @@ options:
   timezone: "Europe/Belgrade"
   storage_report_email: ""
   storage_report_time: "08:00"
+  signal_bridge_token: ""
 schema:
   server_name: str
   registration_token: password?
@@ -79,3 +80,4 @@ schema:
   timezone: str?
   storage_report_email: str?
   storage_report_time: match(^([01]?[0-9]|2[0-3]):[0-5][0-9]$)?
+  signal_bridge_token: password?

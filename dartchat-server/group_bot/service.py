@@ -12,6 +12,8 @@ It also serves the owner's endpoints under /_dartchat/v1/bot/ on
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -34,9 +36,11 @@ from nio import (
     RoomMessageImage,
     RoomMessageText,
 )
+from nio.crypto import attachments
 
+from . import bridge
 from .birthdays import Birthdays, valid as valid_birthday
-from .core import Bot, Message
+from .core import Bot, Message, without_quote as core_without_quote
 from . import moderation
 from .ha import HASensors
 from .rules import RULES, RoomRules, Settings, describe
@@ -51,6 +55,7 @@ REGISTRATION_TOKEN = os.environ.get("DARTCHAT_REGISTRATION_TOKEN", "")
 OPTIONS = os.environ.get("DARTCHAT_OPTIONS", "/data/options.json")
 DATA = os.environ.get("DARTCHAT_BOT_DIR", "/data/group_bot")
 PORT = int(os.environ.get("DARTCHAT_BOT_PORT", "6169"))
+BRIDGE_PORT = int(os.environ.get("DARTCHAT_BRIDGE_PORT", str(bridge.PORT)))
 SERVICE = f"http://127.0.0.1:{os.environ.get('DARTCHAT_INVITE_PORT', '6168')}/_dartchat/v1"
 USERNAME = "dartbot"
 ROOM_ID = r"![A-Za-z0-9._~=+/-]+(?::[A-Za-z0-9.-]+(?::[0-9]+)?)?"
@@ -91,6 +96,10 @@ class Service:
         # (who is in them, that they are encrypted) until something changes.
         self.first_sync = True
         self.senders: dict[str, str] = {}  # recent event id -> sender, for reply stats
+        self.outbox = bridge.Outbox()
+        # Recent event id -> (name, text) in bridged groups, to show what a
+        # reply answers on the Signal side.
+        self.bridged: dict[str, tuple[str, str]] = {}
 
     # -- talking to the chat server directly (not through the front door) --------
     async def chat(self, method, path, body=None, token=None):
@@ -186,9 +195,158 @@ class Service:
         try:
             if not message.is_media and await self.moderate(room, message):
                 return
+            if self.bridge_on(room.room_id):
+                await self.to_signal(room, event, message, reply_to)
             await self.bot.handle(message)
         except Exception:
             log.exception("error handling a message")
+
+    # -- the bridge to the owner's Signal group ------------------------------------
+    def bridge_on(self, room_id: str) -> bool:
+        return bool(self.settings.signal_bridge_token) and self.rules.on(room_id, "signal_bridge")
+
+    def bridge_rooms(self) -> list[str]:
+        return [r for r in self.rules.active_rooms() if self.bridge_on(r)]
+
+    async def to_signal(self, room, event, message: Message, reply_to: str | None) -> None:
+        """Queue a message from a bridged group for the Signal bot."""
+        name = message.sender_name
+        quote = None
+        if reply_to and reply_to in self.bridged:
+            who, said = self.bridged[reply_to]
+            quote = {"name": who, "text": said}
+        if message.is_media:
+            data = await self.download_image(event)
+            if data is None:
+                return
+            content = event.source.get("content", {})
+            info = content.get("info") or {}
+            body = (content.get("body") or "").strip()
+            caption = "" if bridge.looks_like_filename(body) else body
+            filename = body if bridge.looks_like_filename(body) else "photo.jpg"
+            self.outbox.add(name, caption, bridge.image_item(
+                data, info.get("mimetype") or getattr(event, "mimetype", "") or "image/jpeg",
+                filename), quote)
+            self.remember_bridged(message.event_id, name, caption or "📷")
+        else:
+            text = core_without_quote(message.body).strip()
+            if not text:
+                return
+            self.outbox.add(name, text, quote=quote)
+            self.remember_bridged(message.event_id, name, text)
+
+    def remember_bridged(self, event_id: str, name: str, text: str) -> None:
+        if len(self.bridged) > 2000:
+            self.bridged.clear()
+        self.bridged[event_id] = (name, bridge.snippet(text))
+
+    async def download_image(self, event) -> bytes | None:
+        """The picture of an image message, decrypted."""
+        url = getattr(event, "url", "") or ""
+        match = re.fullmatch(r"mxc://([^/]+)/([^/?#]+)", url)
+        if not match:
+            return None
+        try:
+            async with self.http.get(
+                f"{HOMESERVER}/_matrix/client/v1/media/download/{match[1]}/{quote(match[2])}",
+                headers={"Authorization": f"Bearer {self.client.access_token}"},
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                if resp.status != 200:
+                    log.warning("bridge: could not download a picture: %s", resp.status)
+                    return None
+                data = await resp.read()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            log.warning("bridge: could not download a picture: %r", error)
+            return None
+        if isinstance(event, RoomEncryptedImage):
+            try:
+                data = attachments.decrypt_attachment(
+                    data, event.key["k"], event.hashes["sha256"], event.iv)
+            except Exception as error:
+                log.warning("bridge: could not decrypt a picture: %r", error)
+                return None
+        return data
+
+    async def upload_image(self, data: bytes, mime: str, filename: str) -> dict | None:
+        """Encrypt and upload a picture; returns the "file" part of an image message."""
+        ciphertext, keys = attachments.encrypt_attachment(data)
+        try:
+            async with self.http.post(
+                f"{HOMESERVER}/_matrix/media/v3/upload",
+                params={"filename": filename}, data=ciphertext,
+                headers={"Authorization": f"Bearer {self.client.access_token}",
+                         "Content-Type": "application/octet-stream"},
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                answer = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            log.warning("bridge: could not upload a picture: %r", error)
+            return None
+        address = (answer or {}).get("content_uri")
+        if not address:
+            log.warning("bridge: could not upload a picture: %s", answer)
+            return None
+        return {"url": address, **keys}
+
+    async def from_signal(self, body: dict) -> int:
+        """Post a message from the Signal group into every bridged group."""
+        rooms = [r for r in self.bridge_rooms() if self.client and r in self.client.rooms]
+        if not rooms:
+            return 0
+        name = str(body.get("name") or "Signal")[:80]
+        text = str(body.get("text") or "")
+        quote_ = body.get("quote") if isinstance(body.get("quote"), dict) else None
+        pictures = []
+        for image in (body.get("images") or [])[:10]:
+            if not isinstance(image, dict):
+                continue
+            try:
+                data = base64.b64decode(image.get("data") or "", validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            if data:
+                pictures.append((data, image))
+        if not text and not pictures:
+            return 0
+        delivered = 0
+        for room_id in rooms:
+            caption = bridge.signal_text(name, text, quote_)
+            event_id = await self.post(room_id, {"msgtype": "m.text", "body": caption})
+            sent = bool(event_id)
+            if event_id:
+                self.remember_bridged(event_id, name, text or "📷")
+            for data, image in pictures:
+                mime = str(image.get("mime") or "image/jpeg")
+                filename = str(image.get("filename") or "photo.jpg")[:120]
+                file = await self.upload_image(data, mime, filename)
+                if not file:
+                    sent = False
+                    continue
+                info = {"mimetype": mime, "size": len(data)}
+                size = bridge.image_size(data)
+                width, height = image.get("width"), image.get("height")
+                if isinstance(width, int) and isinstance(height, int) and width and height:
+                    size = (width, height)
+                if size:
+                    info["w"], info["h"] = size
+                event_id = await self.post(room_id, {
+                    "msgtype": "m.image", "body": filename, "info": info, "file": file})
+                if event_id:
+                    self.remember_bridged(event_id, name, "📷")
+                sent = sent and bool(event_id)
+            delivered += sent
+        return delivered
+
+    async def post(self, room_id: str, content: dict) -> str | None:
+        content["dartchat.bridge"] = {"from": "signal"}
+        try:
+            response = await self.client.room_send(room_id, "m.room.message", content,
+                                                   ignore_unverified_devices=True)
+            return getattr(response, "event_id", None)
+        except Exception as error:
+            log.warning("bridge: could not post: %r", error)
+            return None
 
     # -- the owner's ban and mute commands ---------------------------------------
     async def service(self, method, path, body=None):
@@ -511,6 +669,63 @@ class Service:
                  ", ".join(r for r, on in wanted.items() if on) or "none")
         return self.room_state(room_id, await self.joined_rooms())
 
+    # -- the Signal bot's endpoints (Home Assistant's internal network) ------------
+    def require_bridge(self, request) -> None:
+        token = self.settings.signal_bridge_token
+        header = request.headers.get("Authorization", "")
+        given = header[7:].strip() if header.startswith("Bearer ") else ""
+        if not token or not secrets.compare_digest(given.encode(), token.encode()):
+            raise ApiError(401, "M_UNKNOWN_TOKEN", "Wrong bridge password.")
+
+    async def api_bridge_status(self, request):
+        self.require_bridge(request)
+        return {"on": bool(self.bridge_rooms()), "ready": self.bot.ready}
+
+    async def api_bridge_outbox(self, request):
+        self.require_bridge(request)
+        try:
+            cursor = int(request.query.get("after", "0"))
+            wait = min(max(float(request.query.get("wait", "0")), 0), bridge.MAX_WAIT)
+        except ValueError:
+            raise ApiError(400, "M_INVALID_PARAM", "after and wait are numbers.")
+        if not self.bridge_rooms():
+            self.outbox.clear()
+        items = await self.outbox.wait(cursor, wait)
+        return {"items": items, "last": self.outbox.last, "on": bool(self.bridge_rooms())}
+
+    async def api_bridge_inbox(self, request):
+        self.require_bridge(request)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise ApiError(400, "M_NOT_JSON", "Send the message as a JSON object.")
+        if not self.client or not self.bot.ready:
+            raise ApiError(503, "DARTCHAT_BOT_STARTING", "The group bot is starting.")
+        delivered = await self.from_signal(body)
+        return {"delivered": delivered, "on": bool(self.bridge_rooms())}
+
+    def bridge_app(self) -> web.Application:
+        def wrap(handler):
+            async def run(request):
+                try:
+                    return web.json_response(await handler(request))
+                except ApiError as error:
+                    return web.json_response({"errcode": error.errcode, "error": error.message},
+                                             status=error.status)
+                except Exception:
+                    log.exception("unexpected error on %s %s", request.method, request.path)
+                    return web.json_response({"errcode": "M_UNKNOWN",
+                                              "error": "Something went wrong."}, status=500)
+            return run
+
+        app = web.Application(client_max_size=64 * 1024 * 1024)
+        app.router.add_get(f"{bridge.PREFIX}/status", wrap(self.api_bridge_status))
+        app.router.add_get(f"{bridge.PREFIX}/outbox", wrap(self.api_bridge_outbox))
+        app.router.add_post(f"{bridge.PREFIX}/inbox", wrap(self.api_bridge_inbox))
+        return app
+
     def app(self) -> web.Application:
         def wrap(handler):
             async def run(request):
@@ -557,6 +772,12 @@ async def run() -> int:
         runner = web.AppRunner(service.app(), access_log=None)
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", PORT).start()
+        if service.settings.signal_bridge_token:
+            # Reachable only inside Home Assistant (no port is published).
+            bridge_runner = web.AppRunner(service.bridge_app(), access_log=None)
+            await bridge_runner.setup()
+            await web.TCPSite(bridge_runner, "0.0.0.0", BRIDGE_PORT).start()
+            log.info("Signal bridge listening on port %d", BRIDGE_PORT)
         await wait_for_server(http)
         await service.connect()
         sensors = HASensors(http, service.bot, service.room_name)

@@ -155,6 +155,7 @@ end-to-end encrypted.
 | Midnight report | Right after midnight (`timezone`), posts the day's statistics and top list. |
 | Home Assistant sensors | Shows the group's numbers as sensors named after the group, for example `sensor.dartchat_drustvo_poruke_danas`. |
 | Birthdays | At `birthday_time` on a member's birthday, posts `birthday_text` (`{name}` is the person). Only the owner enters birthdays, day and month only, in the app under Admin, Accounts: for every member and for themselves. Someone born on 29 February is congratulated on 28 February in other years. |
+| Bridge to Signal | Passes every message and photo between this group and the Signal group of the owner's Signal bot add-on, both ways, as "Name: message". Shown only once `signal_bridge_token` is set. Switch it off to stop both directions at once. See below. |
 
 In texts, `|` separates options picked at random, `{name}` and `{date}` are
 who posted the link first and when, and in score lines `{count}` and `{puta}`
@@ -164,6 +165,31 @@ Messages are end-to-end encrypted, so the bot reads a group as a member of it,
 from the moment it joins. It keeps only links, headlines and counts in
 `/data/group_bot`, never message text. If you delete a message, its links stop
 counting as the first post.
+
+## Bridge to Signal
+
+The group bot can pass messages between a Dart Chat group and one Signal
+group, both ways, through the Signal bot add-on (Signal duplicate-link bot)
+running on the same Home Assistant.
+
+1. Pick a long random password and put it in `signal_bridge_token` here and in
+   the Signal bot's `dartchat_bridge_token`. Restart this add-on.
+2. In the Signal bot's options switch on `dartchat_bridge`. It forwards the
+   group in its `allowed_groups` (or `dartchat_bridge_group`).
+3. In the app, open the Dart Chat group, **Group rules**, and switch on
+   **Bridge to Signal**.
+
+Text and photos pass both ways. A message from Signal is posted in the group
+by the group bot as "Name: message"; a message from Dart Chat is posted in the
+Signal group by the Signal bot the same way. Replies show the message they
+answer above them. Reactions, edits and deletions are not passed on.
+
+To stop it quickly, switch **Bridge to Signal** off in the app, or switch
+`dartchat_bridge` off in the Signal bot. The bridge listens on port 6170 only
+inside Home Assistant (no port is published) and answers only with the
+password. Messages that pass the bridge leave end-to-end encryption: the two
+bots read them in order to pass them on, and Signal's servers carry them on
+the Signal side.
 
 ## Timed bans and mutes
 

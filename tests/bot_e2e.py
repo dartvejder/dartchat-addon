@@ -104,6 +104,7 @@ async def main():
             status, _ = await api(http, "GET", "/status", friend.access_token)
             assert status == 403, status
             bot_id = body["user_id"]
+            assert [r["id"] for r in body["rules"]][:2] == ["repost", "same_news"], body
 
             # Everyone keeps their own birthday, not only the owner.
             status, body = await api(http, "GET", "/birthday", None)
@@ -120,7 +121,6 @@ async def main():
             assert (status, body) == (200, {}), (status, body)
             status, body = await api(http, "PUT", "/birthday", friend.access_token, {})
             assert (status, body) == (200, {}), (status, body)
-            assert [r["id"] for r in body["rules"]][:2] == ["repost", "same_news"], body
 
             room = await owner.room_create(
                 name="Test grupa", invite=[friend.user_id],

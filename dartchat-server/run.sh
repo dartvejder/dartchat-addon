@@ -170,6 +170,10 @@ http {
   proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   server {
     listen 6167;
+    location = /_dartchat/v1/webpush/key {
+      include /tmp/cors-proxy.conf;
+      proxy_pass http://127.0.0.1:5000;
+    }
     location /_dartchat/v1/bot/ {
       include /tmp/cors-proxy.conf;
       proxy_pass http://127.0.0.1:6169;
@@ -201,18 +205,21 @@ http {
 EOF
 ( keep_running "Front door" nginx -c /tmp/nginx.conf ) &
 
-# Notifications: a small gateway on this machine asks Firebase to wake phones.
+# Notifications: a small gateway on this machine asks Firebase to wake phones
+# and browsers' push services to wake the web version.
 # The chat server normally refuses to call local addresses, so the block list
 # below is the default one minus this machine's own address (127.0.0.0/8).
 export CONTINUWUITY_IP_RANGE_DENYLIST='["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10","192.0.0.0/24","169.254.0.0/16","192.88.99.0/24","198.18.0.0/15","192.0.2.0/24","198.51.100.0/24","203.0.113.0/24","224.0.0.0/4","::1/128","fe80::/10","fc00::/7","2001:db8::/32","ff00::/8","fec0::/10"]'
-if [ -n "$FIREBASE_ACCOUNT" ]; then
-  (
-    export DARTCHAT_FIREBASE_ACCOUNT="$FIREBASE_ACCOUNT"
-    keep_running "Push gateway" python3 /push_gateway.py
-  ) &
-else
-  echo "[dartchat] Notifications are off (no Firebase service account set)"
+# Browsers (the web version) are woken through their own push service; that
+# needs no Firebase, so the gateway always runs.
+if [ -z "$FIREBASE_ACCOUNT" ]; then
+  echo "[dartchat] Phone notifications are off (no Firebase service account set)"
 fi
+(
+  export DARTCHAT_FIREBASE_ACCOUNT="$FIREBASE_ACCOUNT"
+  export DARTCHAT_SERVER_NAME="$SERVER_NAME"
+  keep_running "Push gateway" python3 /push_gateway.py
+) &
 unset FIREBASE_ACCOUNT
 
 echo "[dartchat] Starting chat server for $SERVER_NAME on port 6167"

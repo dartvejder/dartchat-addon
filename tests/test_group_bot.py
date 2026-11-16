@@ -148,3 +148,48 @@ def test_rules_file_round_trip(tmp_path):
     assert RoomRules(str(tmp_path / "rooms.json")).get("!a")["repost"] is True
     rules.set("!a", {})
     assert RoomRules(str(tmp_path / "rooms.json")).active_rooms() == []
+
+
+def test_birthdays(tmp_path):
+    from datetime import date
+    from group_bot.birthdays import Birthdays, valid
+
+    assert valid(2, 29) and valid(12, 31)
+    assert not valid(2, 30) and not valid(13, 1) and not valid("5", 1) and not valid(True, 1)
+
+    other = "!druga"
+    bot, sent = make_bot(tmp_path, options={"birthday_time": "9:00"})
+    bot.rules.set(other, {"repost": True})
+    birthdays = Birthdays(str(tmp_path / "birthdays.json"))
+    birthdays.set("@ana:t", 5, 17)
+    birthdays.set("@leap:t", 2, 29)
+    birthdays.set("@gone:t", 5, 17)
+    bot.birthdays = birthdays
+    bot.members = lambda room: {"@ana:t": "Ana", "@leap:t": "Lea", "@marko:t": "Marko"}
+    assert bot.cfg.birthday_time == "09:00"
+
+    day = date(2027, 5, 17)
+    bot.clock = lambda: "08:59"
+    asyncio.run(bot.congratulate(day))
+    assert sent == []
+    bot.clock = lambda: "09:00"
+    asyncio.run(bot.congratulate(day))
+    # Only in the group with the rule on, and only for members of it.
+    assert sent == [(ROOM, "🎂 Srećan rođendan, Ana!", None)]
+    asyncio.run(bot.congratulate(day))
+    assert len(sent) == 1
+
+    sent.clear()
+    asyncio.run(bot.congratulate(date(2027, 2, 28)))
+    assert sent == [(ROOM, "🎂 Srećan rođendan, Lea!", None)]
+    sent.clear()
+    asyncio.run(bot.congratulate(date(2028, 2, 28)))
+    asyncio.run(bot.congratulate(date(2028, 2, 29)))
+    assert sent == [(ROOM, "🎂 Srećan rođendan, Lea!", None)]
+
+    # Saved and read back; removing works.
+    again = Birthdays(str(tmp_path / "birthdays.json"))
+    assert again.get("@ana:t") == (5, 17)
+    again.remove("@ana:t")
+    assert Birthdays(str(tmp_path / "birthdays.json")).get("@ana:t") is None
+    assert any(rule["id"] == "birthdays" for rule in describe(bot.cfg))

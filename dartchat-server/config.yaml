@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.12.1"
+version: "0.13.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -42,6 +42,8 @@ options:
   keyword_reply_text: ""
   keyword_count_text: "{name}: {count}"
   keyword_commands: ""
+  birthday_text: "🎂 Srećan rođendan, {name}!"
+  birthday_time: "09:00"
   expand_short_links: true
   timezone: "Europe/Belgrade"
   storage_report_email: ""
@@ -71,6 +73,8 @@ schema:
   keyword_reply_text: str?
   keyword_count_text: str?
   keyword_commands: str?
+  birthday_text: str?
+  birthday_time: match(^([01]?[0-9]|2[0-3]):[0-5][0-9]$)?
   expand_short_links: bool?
   timezone: str?
   storage_report_email: str?

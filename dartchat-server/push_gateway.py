@@ -8,13 +8,20 @@ never the message, the sender or the chat name. The one other wake-up, sent
 when an invited friend creates their account, says only that someone joined. iPhones get a fixed
 "New message" notice instead of a silent wake-up.
 
-It uses nothing outside the Python standard library, plus the `openssl`
-command to sign the request for a Firebase access token.
+Browsers (the web version, also when installed as an app on a computer) are
+woken through the browser's own push service with Web Push. What they get is
+encrypted for that browser and says only "something new", the chat it is in
+and the unread count; the browser shows a fixed "New message" notice.
+
+It uses the Python standard library, the `openssl` command to sign the
+request for a Firebase access token and, for Web Push, the `cryptography`
+package.
 """
 
 import base64
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -30,7 +37,12 @@ SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 # Overridable so the gateway can be tested without contacting Google.
 FCM_BASE = os.environ.get("DARTCHAT_FCM_BASE", "https://fcm.googleapis.com")
 NOTIFY_PATH = "/_matrix/push/v1/notify"
+# The web app asks for the key browsers check Web Push messages against.
+WEB_KEY_PATH = "/_dartchat/v1/webpush/key"
 MAX_BODY = 64 * 1024
+# The app id of the web version (also when installed on a computer).
+WEB_APP_ID = "com.dartvejder.dartchat.web"
+VAPID_KEY_FILE = os.environ.get("DARTCHAT_VAPID_KEY_FILE", "/data/webpush_vapid.pem")
 
 
 def log(text):
@@ -121,6 +133,166 @@ class Firebase:
             raise RuntimeError(f"Firebase answered {error.code}") from error
 
 
+def b64url_decode(text):
+    text = str(text)
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def is_web(app_id):
+    return str(app_id or "") == WEB_APP_ID
+
+
+def parse_web_push_key(push_key):
+    """A browser's registration: "<endpoint> <p256dh> <auth>".
+
+    The chat server keeps one push key per device, so the browser's address
+    and its two encryption keys travel together in it.
+    """
+    parts = str(push_key or "").split(" ")
+    if len(parts) != 3 or not parts[0].startswith("https://"):
+        raise ValueError("not a browser registration")
+    endpoint, p256dh, auth = parts
+    public = b64url_decode(p256dh)
+    secret = b64url_decode(auth)
+    if len(public) != 65 or public[0] != 4 or len(secret) != 16:
+        raise ValueError("bad browser keys")
+    return endpoint, public, secret
+
+
+def web_push_payload(data):
+    """What the browser receives, before encryption. Never the message, the
+    sender or the chat name: only that something is new, which chat, and how
+    many are unread, plus the owner's notices."""
+    payload = {"unread": data.get("unread", "0")}
+    if data.get("room_id"):
+        payload["room_id"] = data["room_id"]
+    if data.get("kind") in NOTICES:
+        payload["kind"] = data["kind"]
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
+class WebPush:
+    """Sends encrypted Web Push messages (RFC 8291, RFC 8292)."""
+
+    def __init__(self, key_file=VAPID_KEY_FILE, subject="https://localhost"):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        self._ec = ec
+        self._serialization = serialization
+        self.subject = subject
+        try:
+            with open(key_file, "rb") as handle:
+                self._key = serialization.load_pem_private_key(handle.read(), None)
+        except FileNotFoundError:
+            # Made once and kept: a new key would cut off every browser
+            # that registered with the old one.
+            self._key = ec.generate_private_key(ec.SECP256R1())
+            pem = self._key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+            directory = os.path.dirname(key_file)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            handle = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(handle, "wb") as out:
+                out.write(pem)
+        self.public_key = b64url(self._public_bytes(self._key.public_key()))
+        self._lock = threading.Lock()
+        self._tokens = {}
+
+    def _public_bytes(self, key):
+        return key.public_bytes(
+            self._serialization.Encoding.X962,
+            self._serialization.PublicFormat.UncompressedPoint,
+        )
+
+    def _vapid(self, endpoint):
+        """The signed note that tells the browser's push service who sends."""
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+        url = urllib.parse.urlsplit(endpoint)
+        audience = f"{url.scheme}://{url.netloc}"
+        now = time.time()
+        with self._lock:
+            cached = self._tokens.get(audience)
+            if cached and now < cached[1] - 600:
+                return cached[0]
+            expires = int(now) + 12 * 3600
+            header = b64url(json.dumps({"typ": "JWT", "alg": "ES256"}).encode())
+            claims = b64url(
+                json.dumps({"aud": audience, "exp": expires, "sub": self.subject}).encode()
+            )
+            unsigned = f"{header}.{claims}"
+            der = self._key.sign(unsigned.encode(), self._ec.ECDSA(hashes.SHA256()))
+            r, s = decode_dss_signature(der)
+            signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+            token = f"{unsigned}.{b64url(signature)}"
+            self._tokens[audience] = (token, expires)
+            return token
+
+    def encrypt(self, plaintext, browser_public, auth_secret, salt=None, sender_key=None):
+        """aes128gcm content encoding for one browser (RFC 8291)."""
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+        def hkdf(salt_bytes, ikm, info, length):
+            return HKDF(hashes.SHA256(), length, salt_bytes, info).derive(ikm)
+
+        ec = self._ec
+        sender = sender_key or ec.generate_private_key(ec.SECP256R1())
+        sender_public = self._public_bytes(sender.public_key())
+        browser = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), browser_public)
+        shared = sender.exchange(ec.ECDH(), browser)
+        ikm = hkdf(
+            auth_secret, shared, b"WebPush: info\x00" + browser_public + sender_public, 32
+        )
+        salt = salt or os.urandom(16)
+        key = hkdf(salt, ikm, b"Content-Encoding: aes128gcm\x00", 16)
+        nonce = hkdf(salt, ikm, b"Content-Encoding: nonce\x00", 12)
+        # One record: the text, then the "last record" marker.
+        body = AESGCM(key).encrypt(nonce, plaintext + b"\x02", None)
+        header = salt + struct.pack(">IB", 4096, len(sender_public)) + sender_public
+        return header + body
+
+    def wake(self, push_key, data):
+        """Returns True when the browser no longer exists and should be dropped."""
+        try:
+            endpoint, public, secret = parse_web_push_key(push_key)
+        except ValueError:
+            return True
+        if data.get("unread") == "0" and data.get("kind") not in NOTICES:
+            # A browser must show something for every message it gets, so
+            # "all read" is not sent; the app clears its notices itself.
+            return False
+        body = self.encrypt(web_push_payload(data), public, secret)
+        request = urllib.request.Request(
+            endpoint,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"vapid t={self._vapid(endpoint)}, k={self.public_key}",
+                "Content-Encoding": "aes128gcm",
+                "Content-Type": "application/octet-stream",
+                "TTL": "86400",
+                "Urgency": "high",
+                # A newer one replaces a waiting one, like on the phones.
+                "Topic": "dartchat",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15):
+                return False
+        except urllib.error.HTTPError as error:
+            if error.code in (404, 410):
+                return True
+            raise RuntimeError(f"The browser's push service answered {error.code}") from error
+
+
 def is_iphone(app_id):
     return str(app_id or "").endswith(".ios")
 
@@ -187,7 +359,7 @@ def wake_data(notification):
     return data
 
 
-def make_handler(firebase):
+def make_handler(firebase, web_push=None):
     class Handler(BaseHTTPRequestHandler):
         def _reply(self, status, body):
             raw = json.dumps(body).encode()
@@ -196,6 +368,11 @@ def make_handler(firebase):
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
+
+        def do_GET(self):
+            if self.path != WEB_KEY_PATH or web_push is None:
+                return self._reply(404, {"error": "not found"})
+            self._reply(200, {"key": web_push.public_key})
 
         def do_POST(self):
             if self.path != NOTIFY_PATH:
@@ -216,8 +393,16 @@ def make_handler(firebase):
                 push_key = device.get("pushkey") if isinstance(device, dict) else None
                 if not push_key:
                     continue
+                app_id = device.get("app_id", "")
+                sender = web_push if is_web(app_id) else firebase
+                if sender is None:
+                    continue
                 try:
-                    if firebase.wake(push_key, data, device.get("app_id", "")):
+                    if is_web(app_id):
+                        gone = web_push.wake(push_key, data)
+                    else:
+                        gone = firebase.wake(push_key, data, app_id)
+                    if gone:
                         rejected.append(push_key)
                 except Exception as error:  # keep serving whatever happens
                     failed = True
@@ -234,19 +419,31 @@ def make_handler(firebase):
 
 
 def main():
+    firebase = None
     raw = os.environ.get("DARTCHAT_FIREBASE_ACCOUNT", "").strip()
+    if raw:
+        try:
+            account = json.loads(raw)
+            for field in ("project_id", "client_email", "private_key"):
+                if not account.get(field):
+                    raise ValueError(f"'{field}' is missing")
+            firebase = Firebase(account)
+        except (ValueError, AttributeError) as error:
+            log(f"The Firebase service account is not valid ({error}). Phone notifications are off.")
+    web_push = None
     try:
-        account = json.loads(raw)
-        for field in ("project_id", "client_email", "private_key"):
-            if not account.get(field):
-                raise ValueError(f"'{field}' is missing")
-    except (ValueError, AttributeError) as error:
-        log(f"The Firebase service account is not valid ({error}). Notifications are off.")
+        server_name = os.environ.get("DARTCHAT_SERVER_NAME", "") or "localhost"
+        web_push = WebPush(subject=f"https://{server_name}")
+    except Exception as error:  # the phones still get theirs
+        log(f"Web Push is unavailable ({error}). Browser notifications are off.")
+    if firebase is None and web_push is None:
         # Exit code 78 tells the start script not to restart us.
         sys.exit(78)
-    firebase = Firebase(account)
-    server = ThreadingHTTPServer(LISTEN, make_handler(firebase))
-    log(f"Ready. Sending wake-ups through Firebase project {firebase.project}")
+    server = ThreadingHTTPServer(LISTEN, make_handler(firebase, web_push))
+    if firebase:
+        log(f"Ready. Sending wake-ups through Firebase project {firebase.project}")
+    if web_push:
+        log("Ready. Sending browser wake-ups through Web Push")
     server.serve_forever()
 
 

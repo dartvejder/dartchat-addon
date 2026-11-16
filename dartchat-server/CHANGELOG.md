@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.0
+
+- Notifications for the web version, also when its window or tab is closed. Browsers are woken through their own push service (Web Push) instead of Firebase. What the browser gets is encrypted for that browser and says only that something is new, in which chat, and how many are unread; the browser shows "New message". The key the server signs these with is made on first start and kept in `/data/webpush_vapid.pem`. The push gateway now also runs without a Firebase service account; then only browsers get notifications.
+
 ## 0.14.2
 
 - Group bot: phones no longer show "Waiting for this message" for the bot's messages. When handing out the key to its messages failed for some phones (for example while the chat server was restarting), the bot thought it was done; phones signed in later never got the key either. Before each message it now checks that every phone in the group has the key and hands it out again where it is missing. It also answers a phone that asks for the key of one of its earlier messages.

@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir --break-system-packages --target /opt/group_bot/l
 
 FROM alpine:3.22
 
-RUN apk add --no-cache jq ca-certificates python3 openssl nginx tzdata
+RUN apk add --no-cache jq ca-certificates python3 py3-cryptography openssl nginx tzdata
 
 # Keep the server's own loader and libraries together in one folder so they
 # never mix with Alpine's.

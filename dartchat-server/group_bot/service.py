@@ -28,6 +28,7 @@ from aiohttp import web
 from nio import (
     AsyncClient,
     AsyncClientConfig,
+    DummyEvent,
     InviteMemberEvent,
     LoginResponse,
     MegolmEvent,
@@ -104,6 +105,8 @@ class Service:
         # Signal message (its timestamp) -> [(room_id, event_id, quote)] of our copies,
         # so an edit in Signal can edit them.
         self.from_signal_ids: dict[str, list] = {}
+        # Groups where a phone told us it could not read the bot's key.
+        self.reshare_rooms: set[str] = set()
 
     # -- talking to the chat server directly (not through the front door) --------
     async def chat(self, method, path, body=None, token=None):
@@ -176,6 +179,7 @@ class Service:
         client.add_event_callback(self.on_undecryptable, MegolmEvent)
         client.add_event_callback(self.on_redaction, RedactionEvent)
         client.add_event_callback(self.on_invite, InviteMemberEvent)
+        client.add_to_device_callback(self.on_dummy, DummyEvent)
 
     # -- events ---------------------------------------------------------------
     async def on_message(self, room, event) -> None:
@@ -548,11 +552,30 @@ class Service:
                 continue
             try:
                 await client.share_group_session(room_id, ignore_unverified_devices=True)
+                log.info("handed the message key to %d phone(s) that lacked it", len(missing))
             except Exception as error:
                 log.warning("could not hand out the message key: %r", error)
         missing = self.unshared_devices(room)
         if missing:
             log.warning("%d device(s) in a group still lack the message key", len(missing))
+
+    async def on_dummy(self, event) -> None:
+        """A phone couldn't decrypt what the bot sent it (its secure channel to
+        the bot broke) and opened a new one. Whatever key went over the broken
+        channel never arrived: send the current keys to that phone again."""
+        olm = self.client.olm
+        device = next((d for d in olm.device_store.active_user_devices(event.sender)
+                       if d.curve25519 == event.sender_key), None)
+        if device is None:
+            return
+        for room_id in self.rules.active_rooms():
+            room = self.client.rooms.get(room_id)
+            session = olm.outbound_group_sessions.get(room_id)
+            if not room or event.sender not in room.users or session is None:
+                continue
+            session.users_shared_with.discard((event.sender, device.id))
+            self.reshare_rooms.add(room_id)
+        log.info("a phone could not read the bot's message key; sending it again")
 
     async def answer_key_requests(self, response) -> None:
         """A phone that missed the key of one of the bot's messages asks for
@@ -619,6 +642,12 @@ class Service:
                 if hasattr(response, "next_batch"):
                     self.first_sync = False
                     await self.answer_key_requests(response)
+                    for room_id in list(self.reshare_rooms):
+                        self.reshare_rooms.discard(room_id)
+                        try:
+                            await self.ensure_keys_shared(room_id)
+                        except Exception:
+                            log.exception("could not send the message key again")
                     if self.client.should_upload_keys:
                         await self.client.keys_upload()
                     if self.client.should_query_keys:

@@ -104,6 +104,22 @@ async def main():
             status, _ = await api(http, "GET", "/status", friend.access_token)
             assert status == 403, status
             bot_id = body["user_id"]
+
+            # Everyone keeps their own birthday, not only the owner.
+            status, body = await api(http, "GET", "/birthday", None)
+            assert status == 401, (status, body)
+            status, body = await api(http, "GET", "/birthday", friend.access_token)
+            assert (status, body) == (200, {}), (status, body)
+            status, body = await api(http, "PUT", "/birthday", friend.access_token,
+                                     {"month": 2, "day": 30})
+            assert status == 400 and body["errcode"] == "DARTCHAT_BAD_BIRTHDAY", (status, body)
+            status, body = await api(http, "PUT", "/birthday", friend.access_token,
+                                     {"month": 5, "day": 17})
+            assert (status, body) == (200, {"month": 5, "day": 17}), (status, body)
+            status, body = await api(http, "GET", "/birthday", owner.access_token)
+            assert (status, body) == (200, {}), (status, body)
+            status, body = await api(http, "PUT", "/birthday", friend.access_token, {})
+            assert (status, body) == (200, {}), (status, body)
             assert [r["id"] for r in body["rules"]][:2] == ["repost", "same_news"], body
 
             room = await owner.room_create(

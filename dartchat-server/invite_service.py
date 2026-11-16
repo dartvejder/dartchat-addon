@@ -540,7 +540,7 @@ def list_users(handler, body):
             **({"renamed": renames[name]} if name in renames else {}),
         }
         for name in names
-        if name not in (bot, BOT_USER)
+        if name not in (bot, BOT_USER, f"@{LINK_SENDER}:{SERVER_NAME}")
     ]
     return {"users": users}
 
@@ -1761,6 +1761,225 @@ def fetch_link(handler, body):
             connection.close()
     raise ApiError(404, "DARTCHAT_FETCH_FAILED", "Could not fetch it.")
 
+# --- Linking a computer by QR code -----------------------------------------
+#
+# The computer (web or desktop app) asks for a link and shows its id and a
+# public key as a QR code. A phone that is signed in scans it and approves.
+# The server then signs the computer in as that person (with an appservice
+# login, so nobody types a password) and hands the computer what the phone
+# sent: the keys to the message backup, encrypted by the phone for the
+# computer's key. The server only passes that box on; it cannot open it.
+
+LINK_FILE = os.environ.get("DARTCHAT_LINK_FILE", "/data/link_appservice.json")
+LINK_APPSERVICE_ID = "dartchat-link"
+LINK_SENDER = "_dartchat_link"
+LINK_SECONDS = 150
+LINK_RESULT_SECONDS = 120
+LINK_MAX_PENDING = 50
+LINK_ID = re.compile(r"[A-Za-z0-9_-]{22,64}")
+
+links = {}
+link_lock = threading.Condition()
+link_appservice_lock = threading.Lock()
+
+
+def _drop_old_links(now):
+    for key in [
+        key
+        for key, entry in links.items()
+        if now > entry["expires"]
+        or (entry.get("result") and now > entry["result_expires"])
+    ]:
+        del links[key]
+
+
+def start_link(handler, body):
+    """A computer asks to be linked. Returns the id for its QR code and the
+    secret it polls with (which is not in the QR code)."""
+    key = body.get("key")
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", key):
+        raise ApiError(400, "M_INVALID_PARAM", "A public key is needed.")
+    now = time.time()
+    with link_lock:
+        _drop_old_links(now)
+        if len(links) >= LINK_MAX_PENDING:
+            raise ApiError(429, "M_LIMIT_EXCEEDED", "Too many sign-ins waiting. Try again soon.")
+        link_id = secrets.token_urlsafe(24)
+        poll = secrets.token_urlsafe(24)
+        links[link_id] = {
+            "key": key,
+            "poll": poll,
+            "expires": now + LINK_SECONDS,
+            "result": None,
+        }
+    return {"id": link_id, "poll": poll, "expires_in": LINK_SECONDS}
+
+
+def poll_link(handler, body, link_id):
+    """The computer waits for the phone. Answers within about 20 seconds,
+    with the sign-in once a phone approved."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(handler.path).query)
+    poll = (query.get("poll") or [""])[0]
+    deadline = time.time() + 20
+    with link_lock:
+        while True:
+            entry = links.get(link_id)
+            if entry is None or not secrets.compare_digest(entry["poll"], poll):
+                raise ApiError(404, "M_NOT_FOUND", "This code has expired.")
+            if entry["result"] is not None:
+                del links[link_id]
+                return dict(entry["result"], status="done")
+            left = min(deadline, entry["expires"]) - time.time()
+            if left <= 0:
+                if time.time() > entry["expires"]:
+                    del links[link_id]
+                    raise ApiError(404, "M_NOT_FOUND", "This code has expired.")
+                return {"status": "waiting"}
+            link_lock.wait(left)
+
+
+def link_info(handler, body, link_id):
+    """What the phone shows before approving: that the code is still good."""
+    caller(handler)
+    with link_lock:
+        entry = links.get(link_id)
+        if entry is None or entry["result"] is not None or time.time() > entry["expires"]:
+            raise ApiError(404, "M_NOT_FOUND", "This code has expired. Show a new one.")
+        return {"key": entry["key"], "expires_in": int(entry["expires"] - time.time())}
+
+
+def approve_link(handler, body, link_id):
+    """A signed-in phone approves the computer: the computer is signed in
+    as the same person, and gets the box the phone made for it."""
+    user_id, _ = caller(handler)
+    box = body.get("box")
+    if not isinstance(box, dict) or len(json.dumps(box)) > 12000:
+        raise ApiError(400, "M_INVALID_PARAM", "The keys for the computer are missing.")
+    name = body.get("device_name")
+    if not isinstance(name, str) or not name.strip():
+        name = "Computer"
+    with link_lock:
+        entry = links.get(link_id)
+        if entry is None or entry["result"] is not None or time.time() > entry["expires"]:
+            raise ApiError(404, "M_NOT_FOUND", "This code has expired. Show a new one.")
+        entry["claimed"] = True
+    session = appservice_login(user_id, name.strip()[:60])
+    with link_lock:
+        entry = links.get(link_id)
+        if entry is None:
+            raise ApiError(404, "M_NOT_FOUND", "This code has expired. Show a new one.")
+        entry["result"] = {
+            "user_id": session["user_id"],
+            "device_id": session["device_id"],
+            "access_token": session["access_token"],
+            "box": box,
+        }
+        entry["result_expires"] = time.time() + LINK_RESULT_SECONDS
+        link_lock.notify_all()
+    log("A computer was linked by a phone")
+    return {"device_id": session["device_id"]}
+
+
+def _load_link_appservice():
+    try:
+        with open(LINK_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict) and data.get("as_token"):
+            return data
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _owner_admin_command(command):
+    """Runs an admin command with the owner's latest sign-in."""
+    global admin_room_id
+    with moderation_lock:
+        session = load_moderation()["owner"]
+    if not session:
+        raise ApiError(
+            503,
+            "DARTCHAT_OWNER_NEEDED",
+            "The server owner has to open Dart Chat once before computers can be linked.",
+        )
+    token = session["token"]
+    if admin_room_id is None:
+        alias = quote(f"#admins:{SERVER_NAME}")
+        status, found = chat("GET", f"/directory/room/{alias}", token=token)
+        if status != 200 or "room_id" not in found:
+            raise ApiError(502, "DARTCHAT_COMMAND_FAILED", "The admin room was not found.")
+        admin_room_id = found["room_id"]
+    return admin_command(token, command)
+
+
+def _register_link_appservice():
+    """Registers the appservice that may sign people in on a phone's word.
+    Its tokens never leave this machine."""
+    data = {"as_token": secrets.token_urlsafe(32), "hs_token": secrets.token_urlsafe(32)}
+    server = re.escape(SERVER_NAME)
+    registration = "\n".join(
+        [
+            f"id: {LINK_APPSERVICE_ID}",
+            "url: null",
+            f"as_token: {data['as_token']}",
+            f"hs_token: {data['hs_token']}",
+            f"sender_localpart: {LINK_SENDER}",
+            "rate_limited: false",
+            "namespaces:",
+            "  users:",
+            "    - exclusive: false",
+            f"      regex: '@.*:{server}'",
+            "  aliases: []",
+            "  rooms: []",
+        ]
+    )
+    # An older registration under the same id is replaced.
+    try:
+        _owner_admin_command(f"appservices unregister {LINK_APPSERVICE_ID}")
+    except ApiError as error:
+        if error.errcode == "DARTCHAT_OWNER_NEEDED":
+            raise
+    answer, _ = _owner_admin_command(
+        f"appservices register\n```yaml\n{registration}\n```"
+    )
+    log(f"Registered the sign-in helper for linking computers: {answer[:120]}")
+    descriptor = os.open(LINK_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+    return data
+
+
+def _appservice_login(data, user_id, name):
+    return http_json(
+        "POST",
+        f"{HOMESERVER}/_matrix/client/v3/login",
+        {
+            "type": "m.login.application_service",
+            "identifier": {"type": "m.id.user", "user": user_id},
+            "initial_device_display_name": name,
+        },
+        {"Authorization": f"Bearer {data['as_token']}"},
+    )
+
+
+def appservice_login(user_id, name):
+    """A new sign-in (device) for [user_id], made without their password."""
+    with link_appservice_lock:
+        data = _load_link_appservice() or _register_link_appservice()
+        try:
+            status, body = _appservice_login(data, user_id, name)
+        except (urllib.error.URLError, OSError) as error:
+            raise ApiError(502, "DARTCHAT_SERVER_DOWN", "The chat server is not answering.") from error
+        if status in (401, 403) and body.get("errcode") in ("M_UNKNOWN_TOKEN", "M_FORBIDDEN"):
+            # The registration was lost (for example a new database): again.
+            data = _register_link_appservice()
+            status, body = _appservice_login(data, user_id, name)
+    if status != 200 or "access_token" not in body:
+        log(f"Linking a computer failed: {status} {body.get('errcode')}")
+        raise ApiError(502, "DARTCHAT_LINK_FAILED", "The computer could not be signed in.")
+    return body
+
+
 
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
@@ -1781,6 +2000,10 @@ ROUTES = [
     ("POST", re.compile(r"/moderation"), create_moderation),
     ("DELETE", re.compile(r"/moderation/([0-9a-f]{16})"), cancel_moderation),
     ("POST", re.compile(r"/fetch"), fetch_link),
+    ("POST", re.compile(r"/link"), start_link),
+    ("GET", re.compile(r"/link/([A-Za-z0-9_-]{22,64})"), poll_link),
+    ("GET", re.compile(r"/link/([A-Za-z0-9_-]{22,64})/info"), link_info),
+    ("POST", re.compile(r"/link/([A-Za-z0-9_-]{22,64})/approve"), approve_link),
 ]
 
 

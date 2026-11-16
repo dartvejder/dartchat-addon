@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.0
+
+- Sign in on a computer with your phone. The computer shows a QR code; the phone scans it (menu, "Link a computer"), asks you to confirm, and the computer is signed in to the same account with access to your earlier messages. The phone sends the message keys encrypted for that computer only, so the server just passes on a sealed box it cannot open. A code lasts 150 seconds and works once. The server signs the computer in through a small built-in service (`dartchat-link`) that it registers with the chat server on first use, using the owner's session; its details are kept in `/data/link_appservice.json`.
+
 ## 0.15.0
 
 - Notifications for the web version, also when its window or tab is closed. Browsers are woken through their own push service (Web Push) instead of Firebase. What the browser gets is encrypted for that browser and says only that something is new, in which chat, and how many are unread; the browser shows "New message". The key the server signs these with is made on first start and kept in `/data/webpush_vapid.pem`. The push gateway now also runs without a Firebase service account; then only browsers get notifications.

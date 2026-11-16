@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.16.0"
+version: "0.16.1"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon

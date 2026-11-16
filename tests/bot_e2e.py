@@ -23,8 +23,10 @@ import time
 import urllib.parse
 
 import aiohttp
-from nio import (AsyncClient, AsyncClientConfig, RoomEncryptedImage, RoomMessageNotice,
-                 RoomMessageText)
+from nio import (AsyncClient, AsyncClientConfig, MegolmEvent, RoomEncryptedImage,
+                 RoomMessageNotice, RoomMessageText)
+from nio.crypto.key_request import OutgoingKeyRequest
+from nio.event_builders import ToDeviceMessage
 from nio.crypto import attachments
 
 BASE = sys.argv[1]
@@ -59,6 +61,12 @@ async def sign_in(user, password, folder):
         client.messages.append((room.room_id, event))
 
     client.add_event_callback(on_message, (RoomMessageText, RoomEncryptedImage))
+    client.locked = []
+
+    async def on_locked(room, event):
+        client.locked.append((room.room_id, event))
+
+    client.add_event_callback(on_locked, MegolmEvent)
     return client
 
 
@@ -210,6 +218,27 @@ async def check_bridge(http, clients, owner, friend, room_id, path):
         await until([phone] + clients, lambda: any(
             r == room_id and isinstance(e, RoomMessageText) and e.body == "Signal Marko: novi telefon"
             for r, e in phone.messages), "the new phone to read the bot")
+
+        # An earlier bot message, from before this phone existed, is locked for
+        # it. The phone asks the group for the key, as the app does, and the
+        # bot answers. (nio itself only takes keys from its own devices, so
+        # the test lets it take this one.)
+        bot_id = next(u for u in owner.rooms[room_id].users if u.startswith("@dartbot:"))
+        locked = [e for r, e in phone.locked if r == room_id and e.sender == bot_id]
+        assert locked, "expected an earlier bot message the new phone cannot read"
+        event = locked[-1]
+        request_id = "e2e-" + event.session_id[:8]
+        phone.olm.outgoing_key_requests[event.session_id] = OutgoingKeyRequest(
+            request_id, event.session_id, room_id, "m.megolm.v1.aes-sha2")
+        phone.olm._should_accept_forward = lambda *args: True
+        await phone.to_device(ToDeviceMessage("m.room_key_request", bot_id, "*", {
+            "action": "request", "requesting_device_id": phone.device_id,
+            "request_id": request_id,
+            "body": {"algorithm": "m.megolm.v1.aes-sha2", "room_id": room_id,
+                     "session_id": event.session_id, "sender_key": event.sender_key}}))
+        await until([phone] + clients,
+                    lambda: event.session_id not in phone.olm.outgoing_key_requests,
+                    "the bot to answer the key request")
         await phone.close()
 
     # Switched off: nothing passes either way.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.0
+
+- "Show when I am online" switched off in the app now really hides it: friends asking the server get "offline" with no "last seen" time. The app sends `dartchat_hidden` with its own presence update; the front door keeps the list in `/data/hidden_presence.json` and takes the field off before the chat server sees it.
+
 ## 0.17.0
 
 - Voice messages to text. The app sends a voice message it has decrypted to `/_dartchat/v1/transcribe`; the server turns it into 16 kHz sound with ffmpeg and asks the Whisper add-on on this Home Assistant for the words (Wyoming protocol, `whisper_host`, `whisper_port`, `whisper_language`, default `core-whisper`, `10300`, `sr`). The phone gets a job id and asks for the text until it is ready, so long messages do not run into the Cloudflare Tunnel's time limit. One message at a time; nothing is written to disk and the text is forgotten once the phone has it. Cyrillic is written in Latin letters (`whisper_latin`, on by default).

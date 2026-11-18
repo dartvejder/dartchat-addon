@@ -138,6 +138,21 @@ def circles_test(owner, join):
     expect(call("GET", f"{MATRIX}/profile/%40wes%3Achat.test", token=sam), 404)
     expect(call("GET", f"{MATRIX}/profile/@wes:chat.test"), 401)
     expect(call("GET", f"{MATRIX}/presence/@wes:chat.test/status", token=sam), 404)
+    # Online status switched off: friends see offline and no "last seen".
+    presence_path = f"{MATRIX}/presence/@sue:chat.test/status"
+    expect(
+        call("PUT", presence_path, {"presence": "online", "dartchat_hidden": True}, sue),
+        200,
+    )
+    hidden = expect(call("GET", presence_path, token=sam), 200)
+    assert hidden == {"presence": "offline"}, hidden
+    expect(call("GET", presence_path, token=sue), 200)
+    expect(
+        call("PUT", presence_path, {"presence": "online", "dartchat_hidden": False}, sue),
+        200,
+    )
+    shown = expect(call("GET", presence_path, token=sam), 200)
+    assert shown.get("presence") == "online", shown
     # Everyone sees the owner, the owner sees everyone, no circle sees only the owner.
     expect(profile(sam, "boss"), 200)
     expect(profile(owner, "wes"), 200)

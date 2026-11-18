@@ -933,6 +933,18 @@ def guard(handler, match, raw):
         target = urllib.parse.unquote(match["presence"])
         if not may_see(user_id, token, target):
             return as_json(*NOT_FOUND)
+        if target != user_id and presence_hidden(target):
+            # Switched off in the app: no "online", no "last seen".
+            return as_json(200, {"presence": "offline"})
+    elif (
+        match["presence"]
+        and method == "PUT"
+        and body is not None
+        and urllib.parse.unquote(match["presence"]) == user_id
+        and isinstance(body.get("dartchat_hidden"), bool)
+    ):
+        set_presence_hidden(user_id, body.pop("dartchat_hidden"))
+        raw = json.dumps(body).encode()
     elif match["create"] and method == "POST" and body is not None:
         invited = body.get("invite", [])
         if isinstance(invited, list) and not all(
@@ -1023,6 +1035,60 @@ def guard(handler, match, raw):
             return as_json(200, {"results": [], "limited": False})
 
     return forward(handler, raw)
+
+
+# ---- hidden online status --------------------------------------------------
+#
+# A person who switches off "Show when I am online" in the app is shown to
+# everyone else as offline with no "last seen" time. The app says so with an
+# extra field on its own presence update, which is taken off before the chat
+# server sees it.
+
+HIDDEN_PRESENCE_FILE = os.environ.get(
+    "DARTCHAT_HIDDEN_PRESENCE", "/data/hidden_presence.json"
+)
+hidden_presence_lock = threading.Lock()
+hidden_presence = None  # set of user ids
+
+
+def load_hidden_presence():
+    global hidden_presence
+    if hidden_presence is None:
+        hidden_presence = set()
+        try:
+            with open(HIDDEN_PRESENCE_FILE, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, list):
+                hidden_presence = {u for u in loaded if isinstance(u, str)}
+        except (OSError, ValueError):
+            pass
+    return hidden_presence
+
+
+def presence_hidden(user_id):
+    with hidden_presence_lock:
+        return user_id in load_hidden_presence()
+
+
+def set_presence_hidden(user_id, hidden):
+    with hidden_presence_lock:
+        users = load_hidden_presence()
+        if (user_id in users) == hidden:
+            return
+        if hidden:
+            users.add(user_id)
+        else:
+            users.discard(user_id)
+        temporary = f"{HIDDEN_PRESENCE_FILE}.tmp"
+        try:
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(sorted(users), handle)
+            os.replace(temporary, HIDDEN_PRESENCE_FILE)
+        except OSError as error:
+            log(f"Could not save hidden online status: {error}")
 
 
 # ---- message counts --------------------------------------------------------

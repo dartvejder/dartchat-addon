@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.2
+
+- iPhone: "New message" notices are marked so the app's notification helper may change them before they are shown. With an app that has the helper, the notice then shows the chat's name (the person or the group), which the phone asks the chat server for itself; the push through Apple still carries no name or text. Older iPhone apps keep showing "New message".
+
 ## 0.16.1
 
 - Group bot: when a phone cannot read the key the bot sent it (its secure channel to the bot broke, so it opens a new one), the bot now sends the key again over the new channel, so its later messages are readable on that phone. It logs when it does.

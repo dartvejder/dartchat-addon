@@ -326,6 +326,11 @@ def fcm_message(push_key, data, app_id=""):
             "sound": "default",
             "badge": unread,
         }
+        if not notice:
+            # Lets the app's notification helper on the iPhone ask the chat
+            # server which chat this is and put its name on the notice. The
+            # name never passes through Apple or Google.
+            aps["mutable-content"] = 1
         # One notice at a time, like on Android: a newer one replaces it.
         headers = {
             "apns-push-type": "alert",

@@ -23,6 +23,11 @@ def test_iphone_gets_a_fixed_notice_with_the_unread_count():
     assert message["apns"]["headers"]["apns-push-type"] == "alert"
 
 
+def test_iphone_message_notice_can_be_named_on_the_phone():
+    message = fcm_message("tok", DATA, "com.dartvejder.dartchat.ios")["message"]
+    assert message["apns"]["payload"]["aps"]["mutable-content"] == 1
+
+
 def test_iphone_all_read_clears_the_counter_quietly():
     data = dict(DATA, unread="0")
     message = fcm_message("tok", data, "com.dartvejder.dartchat.ios")["message"]

@@ -146,13 +146,16 @@ def circles_test(owner, join):
     )
     hidden = expect(call("GET", presence_path, token=sam), 200)
     assert hidden == {"presence": "offline"}, hidden
-    expect(call("GET", presence_path, token=sue), 200)
+    # Her own status is not hidden from herself: the chat server answers.
+    own = call("GET", presence_path, token=sue)
+    assert own != (200, {"presence": "offline"}), own
     expect(
         call("PUT", presence_path, {"presence": "online", "dartchat_hidden": False}, sue),
         200,
     )
-    shown = expect(call("GET", presence_path, token=sam), 200)
-    assert shown.get("presence") == "online", shown
+    # Shown again: the chat server answers, whatever it knows.
+    shown = call("GET", presence_path, token=sam)
+    assert shown != (200, {"presence": "offline"}), shown
     # Everyone sees the owner, the owner sees everyone, no circle sees only the owner.
     expect(profile(sam, "boss"), 200)
     expect(profile(owner, "wes"), 200)

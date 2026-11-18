@@ -17,6 +17,9 @@ APP_LINK="$(opt app_link)"
 TIMEZONE="$(opt timezone)"
 REPORT_EMAIL="$(opt storage_report_email)"
 REPORT_TIME="$(opt storage_report_time)"
+WHISPER_HOST="$(opt whisper_host)"
+WHISPER_PORT="$(opt whisper_port)"
+WHISPER_LANGUAGE="$(opt whisper_language)"
 
 if [ -z "$SERVER_NAME" ]; then
   echo "[dartchat] FATAL: set 'server_name' in the add-on configuration" >&2
@@ -107,6 +110,10 @@ keep_running() {
   export DARTCHAT_INVITE_FROM="$INVITE_FROM"
   export DARTCHAT_APP_LINK="$APP_LINK"
   export DARTCHAT_TIMEZONE="$TIMEZONE"
+  # Voice messages to text, through the Whisper add-on (Wyoming protocol).
+  export DARTCHAT_WHISPER_HOST="${WHISPER_HOST:-core-whisper}"
+  export DARTCHAT_WHISPER_PORT="${WHISPER_PORT:-10300}"
+  export DARTCHAT_WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-sr}"
   keep_running "Invitation service" python3 /invite_service.py
 ) &
 # Daily storage email: how much space the chat uses, how fast it grows, and

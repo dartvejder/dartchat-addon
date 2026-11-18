@@ -261,6 +261,6 @@ Set up once:
 
 1. Settings, Add-ons, Add-on store: install **Whisper** (the official one, by Home Assistant) and start it.
 2. In its configuration pick a model. `small-int8` is quick; `medium-int8` understands Serbian noticeably better but is slower. Set the language to `sr`.
-3. Nothing else is needed here: `whisper_host` (`core-whisper`), `whisper_port` (`10300`) and `whisper_language` (`sr`) already point at it. Use `auto` as the language to let Whisper guess.
+3. Nothing else is needed here: `whisper_host` (`core-whisper`), `whisper_port` (`10300`) and `whisper_language` (`sr`) already point at it. Use `auto` as the language to let Whisper guess. Whisper often writes Serbian in Cyrillic; with `whisper_latin` on (the default) the server turns it into Latin letters.
 
 One voice message is turned into text at a time; a phone waits its turn. Without the Whisper add-on the app says that turning voice into text is not set up.

@@ -52,6 +52,7 @@ options:
   whisper_host: "core-whisper"
   whisper_port: 10300
   whisper_language: "sr"
+  whisper_latin: true
 schema:
   server_name: str
   registration_token: password?
@@ -87,3 +88,4 @@ schema:
   whisper_host: str?
   whisper_port: port?
   whisper_language: str?
+  whisper_latin: bool?

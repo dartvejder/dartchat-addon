@@ -1993,6 +1993,15 @@ def appservice_login(user_id, name):
 WHISPER_HOST = os.environ.get("DARTCHAT_WHISPER_HOST", "core-whisper")
 WHISPER_PORT = int(os.environ.get("DARTCHAT_WHISPER_PORT") or 10300)
 WHISPER_LANGUAGE = os.environ.get("DARTCHAT_WHISPER_LANGUAGE", "sr")
+# Whisper often writes Serbian in Cyrillic; the friends write in Latin.
+WHISPER_LATIN = os.environ.get("DARTCHAT_WHISPER_LATIN", "true") != "false"
+CYRILLIC_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ђ": "đ", "е": "e",
+    "ж": "ž", "з": "z", "и": "i", "ј": "j", "к": "k", "л": "l", "љ": "lj",
+    "м": "m", "н": "n", "њ": "nj", "о": "o", "п": "p", "р": "r", "с": "s",
+    "т": "t", "ћ": "ć", "у": "u", "ф": "f", "х": "h", "ц": "c", "ч": "č",
+    "џ": "dž", "ш": "š",
+}
 TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
 TRANSCRIBE_MAX_SECONDS = 15 * 60
 TRANSCRIBE_KEEP_SECONDS = 15 * 60
@@ -2010,6 +2019,25 @@ class TranscribeError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def to_latin(text):
+    """Serbian Cyrillic in Latin letters: "Здраво, Љубо" is "Zdravo, Ljubo"."""
+    out = []
+    for i, letter in enumerate(text):
+        lower = letter.lower()
+        latin = CYRILLIC_TO_LATIN.get(lower)
+        if latin is None:
+            out.append(letter)
+        elif letter == lower:
+            out.append(latin)
+        elif len(latin) > 1:
+            # "Љубо" is "Ljubo", but "ЉУБО" is "LJUBO".
+            after = text[i + 1:i + 2]
+            out.append(latin.upper() if after.isupper() else latin.capitalize())
+        else:
+            out.append(latin.upper())
+    return "".join(out)
 
 
 def to_pcm(audio):
@@ -2105,6 +2133,8 @@ def transcribe_worker():
         started = time.time()
         try:
             text = whisper_text(to_pcm(audio), language)
+            if WHISPER_LATIN:
+                text = to_latin(text)
             update = {"status": "done", "text": text}
             log(f"Voice message turned into text in {time.time() - started:.1f} s")
         except TranscribeError as error:

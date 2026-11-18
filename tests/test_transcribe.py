@@ -128,3 +128,7 @@ def test_ffmpeg_turns_m4a_into_16khz_mono(tmp_path):
     assert abs(len(pcm) - 32000) < 3000
     with pytest.raises(service.TranscribeError):
         service.to_pcm(b"not a sound")
+
+
+def test_cyrillic_becomes_latin():
+    assert service.to_latin("Здраво, Љубо! ЉУБО, шта радиш? Hi") == "Zdravo, Ljubo! LJUBO, šta radiš? Hi"

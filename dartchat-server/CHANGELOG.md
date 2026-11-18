@@ -3,6 +3,7 @@
 ## 0.18.0
 
 - "Show when I am online" switched off in the app now really hides it: friends asking the server get "offline" with no "last seen" time. The app sends `dartchat_hidden` with its own presence update; the front door keeps the list in `/data/hidden_presence.json` and takes the field off before the chat server sees it.
+- Taking someone out of a circle (or deleting a circle) also closes the private chats between people who no longer share a circle: both leave it, through the owner's admin commands, in the background. Groups stay, since the owner decides who is in those. A chat where the other person never accepted the invitation is not closed.
 
 ## 0.17.0
 

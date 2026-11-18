@@ -641,33 +641,92 @@ def create_circle(handler, body):
 
 
 def update_circle(handler, body, circle_id):
-    require_admin(handler)
+    _, token = require_admin(handler)
     with store.lock:
         for circle in store.data["circles"]:
             if circle["id"] == circle_id:
+                before = list(circle["members"])
                 if "name" in body:
                     circle["name"] = clean_circle_name(body)
                 if "members" in body:
                     circle["members"] = clean_members(body)
                 store.save()
-                return dict(circle)
-    raise ApiError(404, "M_NOT_FOUND", "No such circle.")
+                answer = dict(circle)
+                break
+        else:
+            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
+    removed = [m for m in before if m not in answer["members"]]
+    part_ways(token, removed, before)
+    return answer
 
 
 def delete_circle(handler, body, circle_id):
-    require_admin(handler)
+    _, token = require_admin(handler)
     with store.lock:
-        before = len(store.data["circles"])
+        gone = [c for c in store.data["circles"] if c["id"] == circle_id]
+        if not gone:
+            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
         store.data["circles"] = [
             c for c in store.data["circles"] if c["id"] != circle_id
         ]
-        if len(store.data["circles"]) == before:
-            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
         for invite in store.data["invites"]:
             if circle_id in invite.get("circles", []):
                 invite["circles"].remove(circle_id)
         store.save()
+    members = list(gone[0]["members"])
+    part_ways(token, members, members)
     return {}
+
+
+# Someone taken out of a circle also leaves the private chats they had with
+# people they can no longer see. Groups stay: the owner decides who is in
+# those. Done in the background with the owner's admin commands, since the
+# owner is not in those chats.
+
+ROOM_ID = re.compile(r"(![^\s`|,()]+)")
+USER_ID = re.compile(r"(@[a-z0-9._=/+-]+:[A-Za-z0-9.:\[\]-]+)")
+
+
+def part_ways(token, movers, others):
+    pairs = {
+        tuple(sorted((a, b)))
+        for a in movers
+        for b in others
+        if a != b and not in_same_circle(a, b)
+    }
+    if pairs:
+        threading.Thread(
+            target=close_private_chats, args=(token, sorted(pairs)), daemon=True
+        ).start()
+
+
+def close_private_chats(token, pairs):
+    rooms_of = {}
+    members_of = {}
+
+    def joined_rooms(user):
+        if user not in rooms_of:
+            answer, _ = admin_command(token, f"users list-joined-rooms {user}")
+            rooms_of[user] = set(ROOM_ID.findall(answer))
+        return rooms_of[user]
+
+    def members(room):
+        if room not in members_of:
+            answer, _ = admin_command(token, f"rooms info list-joined-members {room}")
+            members_of[room] = set(USER_ID.findall(answer))
+        return members_of[room]
+
+    for a, b in pairs:
+        try:
+            shared = joined_rooms(a) & joined_rooms(b)
+            for room in sorted(shared):
+                if members(room) != {a, b}:
+                    continue
+                for user in (a, b):
+                    admin_command(token, f"users force-leave-room {user} {room}")
+                log(f"Closed the private chat of {a} and {b}: no shared circle any more")
+        except ApiError as error:
+            log(f"Could not close the private chats of {a} and {b}: {error}")
 
 
 # ---- visibility guard -----------------------------------------------------

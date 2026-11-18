@@ -641,33 +641,92 @@ def create_circle(handler, body):
 
 
 def update_circle(handler, body, circle_id):
-    require_admin(handler)
+    _, token = require_admin(handler)
     with store.lock:
         for circle in store.data["circles"]:
             if circle["id"] == circle_id:
+                before = list(circle["members"])
                 if "name" in body:
                     circle["name"] = clean_circle_name(body)
                 if "members" in body:
                     circle["members"] = clean_members(body)
                 store.save()
-                return dict(circle)
-    raise ApiError(404, "M_NOT_FOUND", "No such circle.")
+                answer = dict(circle)
+                break
+        else:
+            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
+    removed = [m for m in before if m not in answer["members"]]
+    part_ways(token, removed, before)
+    return answer
 
 
 def delete_circle(handler, body, circle_id):
-    require_admin(handler)
+    _, token = require_admin(handler)
     with store.lock:
-        before = len(store.data["circles"])
+        gone = [c for c in store.data["circles"] if c["id"] == circle_id]
+        if not gone:
+            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
         store.data["circles"] = [
             c for c in store.data["circles"] if c["id"] != circle_id
         ]
-        if len(store.data["circles"]) == before:
-            raise ApiError(404, "M_NOT_FOUND", "No such circle.")
         for invite in store.data["invites"]:
             if circle_id in invite.get("circles", []):
                 invite["circles"].remove(circle_id)
         store.save()
+    members = list(gone[0]["members"])
+    part_ways(token, members, members)
     return {}
+
+
+# Someone taken out of a circle also leaves the private chats they had with
+# people they can no longer see. Groups stay: the owner decides who is in
+# those. Done in the background with the owner's admin commands, since the
+# owner is not in those chats.
+
+ROOM_ID = re.compile(r"(![^\s`|,()]+)")
+USER_ID = re.compile(r"(@[a-z0-9._=/+-]+:[A-Za-z0-9.:\[\]-]+)")
+
+
+def part_ways(token, movers, others):
+    pairs = {
+        tuple(sorted((a, b)))
+        for a in movers
+        for b in others
+        if a != b and not in_same_circle(a, b)
+    }
+    if pairs:
+        threading.Thread(
+            target=close_private_chats, args=(token, sorted(pairs)), daemon=True
+        ).start()
+
+
+def close_private_chats(token, pairs):
+    rooms_of = {}
+    members_of = {}
+
+    def joined_rooms(user):
+        if user not in rooms_of:
+            answer, _ = admin_command(token, f"users list-joined-rooms {user}")
+            rooms_of[user] = set(ROOM_ID.findall(answer))
+        return rooms_of[user]
+
+    def members(room):
+        if room not in members_of:
+            answer, _ = admin_command(token, f"rooms info list-joined-members {room}")
+            members_of[room] = set(USER_ID.findall(answer))
+        return members_of[room]
+
+    for a, b in pairs:
+        try:
+            shared = joined_rooms(a) & joined_rooms(b)
+            for room in sorted(shared):
+                if members(room) != {a, b}:
+                    continue
+                for user in (a, b):
+                    admin_command(token, f"users force-leave-room {user} {room}")
+                log(f"Closed the private chat of {a} and {b}: no shared circle any more")
+        except ApiError as error:
+            log(f"Could not close the private chats of {a} and {b}: {error}")
 
 
 # ---- visibility guard -----------------------------------------------------
@@ -933,6 +992,18 @@ def guard(handler, match, raw):
         target = urllib.parse.unquote(match["presence"])
         if not may_see(user_id, token, target):
             return as_json(*NOT_FOUND)
+        if target != user_id and presence_hidden(target):
+            # Switched off in the app: no "online", no "last seen".
+            return as_json(200, {"presence": "offline"})
+    elif (
+        match["presence"]
+        and method == "PUT"
+        and body is not None
+        and urllib.parse.unquote(match["presence"]) == user_id
+        and isinstance(body.get("dartchat_hidden"), bool)
+    ):
+        set_presence_hidden(user_id, body.pop("dartchat_hidden"))
+        raw = json.dumps(body).encode()
     elif match["create"] and method == "POST" and body is not None:
         invited = body.get("invite", [])
         if isinstance(invited, list) and not all(
@@ -1023,6 +1094,60 @@ def guard(handler, match, raw):
             return as_json(200, {"results": [], "limited": False})
 
     return forward(handler, raw)
+
+
+# ---- hidden online status --------------------------------------------------
+#
+# A person who switches off "Show when I am online" in the app is shown to
+# everyone else as offline with no "last seen" time. The app says so with an
+# extra field on its own presence update, which is taken off before the chat
+# server sees it.
+
+HIDDEN_PRESENCE_FILE = os.environ.get(
+    "DARTCHAT_HIDDEN_PRESENCE", "/data/hidden_presence.json"
+)
+hidden_presence_lock = threading.Lock()
+hidden_presence = None  # set of user ids
+
+
+def load_hidden_presence():
+    global hidden_presence
+    if hidden_presence is None:
+        hidden_presence = set()
+        try:
+            with open(HIDDEN_PRESENCE_FILE, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, list):
+                hidden_presence = {u for u in loaded if isinstance(u, str)}
+        except (OSError, ValueError):
+            pass
+    return hidden_presence
+
+
+def presence_hidden(user_id):
+    with hidden_presence_lock:
+        return user_id in load_hidden_presence()
+
+
+def set_presence_hidden(user_id, hidden):
+    with hidden_presence_lock:
+        users = load_hidden_presence()
+        if (user_id in users) == hidden:
+            return
+        if hidden:
+            users.add(user_id)
+        else:
+            users.discard(user_id)
+        temporary = f"{HIDDEN_PRESENCE_FILE}.tmp"
+        try:
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(sorted(users), handle)
+            os.replace(temporary, HIDDEN_PRESENCE_FILE)
+        except OSError as error:
+            log(f"Could not save hidden online status: {error}")
 
 
 # ---- message counts --------------------------------------------------------

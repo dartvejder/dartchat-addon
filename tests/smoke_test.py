@@ -138,6 +138,24 @@ def circles_test(owner, join):
     expect(call("GET", f"{MATRIX}/profile/%40wes%3Achat.test", token=sam), 404)
     expect(call("GET", f"{MATRIX}/profile/@wes:chat.test"), 401)
     expect(call("GET", f"{MATRIX}/presence/@wes:chat.test/status", token=sam), 404)
+    # Online status switched off: friends see offline and no "last seen".
+    presence_path = f"{MATRIX}/presence/@sue:chat.test/status"
+    expect(
+        call("PUT", presence_path, {"presence": "online", "dartchat_hidden": True}, sue),
+        200,
+    )
+    hidden = expect(call("GET", presence_path, token=sam), 200)
+    assert hidden == {"presence": "offline"}, hidden
+    # Her own status is not hidden from herself: the chat server answers.
+    own = call("GET", presence_path, token=sue)
+    assert own != (200, {"presence": "offline"}), own
+    expect(
+        call("PUT", presence_path, {"presence": "online", "dartchat_hidden": False}, sue),
+        200,
+    )
+    # Shown again: the chat server answers, whatever it knows.
+    shown = call("GET", presence_path, token=sam)
+    assert shown != (200, {"presence": "offline"}), shown
     # Everyone sees the owner, the owner sees everyone, no circle sees only the owner.
     expect(profile(sam, "boss"), 200)
     expect(profile(owner, "wes"), 200)
@@ -229,6 +247,32 @@ def circles_test(owner, join):
     expect(call("DELETE", f"{INVITE}/admin/circles/{work}", token=owner), 200)
     expect(profile(sue, "wes"), 200)  # they share a chat now
     expect(create_room(sue, ["wes"]), 404)
+
+    # Taken out of the circle: the private chat between them is closed for
+    # both. The owner's group with both of them stays.
+    expect(call("POST", f"{MATRIX}/rooms/{room}/join", {}, sue), 200)
+    expect(
+        call(
+            "PUT",
+            f"{INVITE}/admin/circles/{school}",
+            {"members": ["@sam:chat.test"]},
+            owner,
+        ),
+        200,
+    )
+
+    def joined(token):
+        return expect(call("GET", MATRIX + "/joined_rooms", token=token), 200)[
+            "joined_rooms"
+        ]
+
+    for _ in range(60):
+        if room not in joined(sam) and room not in joined(sue):
+            break
+        time.sleep(1)
+    assert room not in joined(sam), "the private chat stayed open for sam"
+    assert room not in joined(sue), "the private chat stayed open for sue"
+    assert club in joined(sam), "the owner's group was closed too"
 
     # Strangers cannot probe usernames, and direct sign-up is closed.
     expect(login("sam", "wrong-password"), 403, errcode="M_FORBIDDEN")

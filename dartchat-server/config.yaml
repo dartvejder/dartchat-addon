@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.16.2"
+version: "0.17.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -49,6 +49,10 @@ options:
   storage_report_email: ""
   storage_report_time: "08:00"
   signal_bridge_token: ""
+  whisper_host: "core-whisper"
+  whisper_port: 10300
+  whisper_language: "sr"
+  whisper_latin: true
 schema:
   server_name: str
   registration_token: password?
@@ -81,3 +85,7 @@ schema:
   storage_report_email: str?
   storage_report_time: match(^([01]?[0-9]|2[0-3]):[0-5][0-9]$)?
   signal_bridge_token: password?
+  whisper_host: str?
+  whisper_port: port?
+  whisper_language: str?
+  whisper_latin: bool?

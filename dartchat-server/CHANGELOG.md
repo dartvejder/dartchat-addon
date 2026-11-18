@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.0
+
+- Voice messages to text. The app sends a voice message it has decrypted to `/_dartchat/v1/transcribe`; the server turns it into 16 kHz sound with ffmpeg and asks the Whisper add-on on this Home Assistant for the words (Wyoming protocol, `whisper_host`, `whisper_port`, `whisper_language`, default `core-whisper`, `10300`, `sr`). The phone gets a job id and asks for the text until it is ready, so long messages do not run into the Cloudflare Tunnel's time limit. One message at a time; nothing is written to disk and the text is forgotten once the phone has it. Cyrillic is written in Latin letters (`whisper_latin`, on by default).
+
 ## 0.16.2
 
 - iPhone: "New message" notices are marked so the app's notification helper may change them before they are shown. With an app that has the helper, the notice then shows the chat's name (the person or the group), which the phone asks the chat server for itself; the push through Apple still carries no name or text. Older iPhone apps keep showing "New message".

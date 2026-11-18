@@ -1981,6 +1981,234 @@ def appservice_login(user_id, name):
 
 
 
+# ---------------------------------------------------------------------------
+# Voice messages to text. A phone decrypts a voice message itself and sends
+# the sound here; this service turns it into plain 16 kHz sound with ffmpeg
+# and asks the Whisper add-on on this Home Assistant (Wyoming protocol) for
+# the words. Nothing is written to disk except a short-lived temporary file,
+# and the text is kept in memory only until the phone has fetched it.
+# Long messages can take longer than the Cloudflare Tunnel waits for one
+# answer, so the phone gets a job id and asks again until the text is ready.
+
+WHISPER_HOST = os.environ.get("DARTCHAT_WHISPER_HOST", "core-whisper")
+WHISPER_PORT = int(os.environ.get("DARTCHAT_WHISPER_PORT") or 10300)
+WHISPER_LANGUAGE = os.environ.get("DARTCHAT_WHISPER_LANGUAGE", "sr")
+# Whisper often writes Serbian in Cyrillic; the friends write in Latin.
+WHISPER_LATIN = os.environ.get("DARTCHAT_WHISPER_LATIN", "true") != "false"
+CYRILLIC_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ђ": "đ", "е": "e",
+    "ж": "ž", "з": "z", "и": "i", "ј": "j", "к": "k", "л": "l", "љ": "lj",
+    "м": "m", "н": "n", "њ": "nj", "о": "o", "п": "p", "р": "r", "с": "s",
+    "т": "t", "ћ": "ć", "у": "u", "ф": "f", "х": "h", "ц": "c", "ч": "č",
+    "џ": "dž", "ш": "š",
+}
+TRANSCRIBE_MAX_BYTES = 8 * 1024 * 1024
+TRANSCRIBE_MAX_SECONDS = 15 * 60
+TRANSCRIBE_KEEP_SECONDS = 15 * 60
+TRANSCRIBE_MAX_WAITING = 20
+
+transcribe_jobs = {}
+transcribe_lock = threading.Lock()
+transcribe_queue = []
+transcribe_wake = threading.Condition(transcribe_lock)
+transcribe_worker_started = False
+
+
+class TranscribeError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def to_latin(text):
+    """Serbian Cyrillic in Latin letters: "Здраво, Љубо" is "Zdravo, Ljubo"."""
+    out = []
+    for i, letter in enumerate(text):
+        lower = letter.lower()
+        latin = CYRILLIC_TO_LATIN.get(lower)
+        if latin is None:
+            out.append(letter)
+        elif letter == lower:
+            out.append(latin)
+        elif len(latin) > 1:
+            # "Љубо" is "Ljubo", but "ЉУБО" is "LJUBO".
+            after = text[i + 1:i + 2]
+            out.append(latin.upper() if after.isupper() else latin.capitalize())
+        else:
+            out.append(latin.upper())
+    return "".join(out)
+
+
+def to_pcm(audio):
+    """Any voice-message sound (AAC in m4a, Opus in webm or ogg) as 16 kHz,
+    16-bit, mono samples."""
+    import subprocess
+    import tempfile
+
+    # A file, not a pipe: m4a files may keep their index at the end.
+    with tempfile.NamedTemporaryFile(prefix="dartchat-voice-") as source:
+        source.write(audio)
+        source.flush()
+        try:
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+                    "-i", source.name, "-t", str(TRANSCRIBE_MAX_SECONDS),
+                    "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
+                    "pipe:1",
+                ],
+                capture_output=True,
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise TranscribeError("DARTCHAT_BAD_AUDIO", f"Could not read the sound: {error}")
+    if result.returncode != 0 or not result.stdout:
+        raise TranscribeError("DARTCHAT_BAD_AUDIO", "Could not read the sound.")
+    return result.stdout
+
+
+def wyoming_send(sock, event_type, data=None, payload=b""):
+    header = {"type": event_type, "data": data or {}}
+    if payload:
+        header["payload_length"] = len(payload)
+    sock.sendall(json.dumps(header).encode() + b"\n" + payload)
+
+
+def wyoming_read(stream):
+    line = stream.readline()
+    if not line:
+        raise TranscribeError("DARTCHAT_WHISPER_FAILED", "Whisper closed the connection.")
+    event = json.loads(line)
+    data = event.get("data") or {}
+    extra = event.get("data_length") or 0
+    if extra:
+        data.update(json.loads(stream.read(extra)))
+    if event.get("payload_length"):
+        stream.read(event["payload_length"])
+    return event.get("type"), data
+
+
+def whisper_text(pcm, language):
+    """The words in 16 kHz mono sound, from the Whisper add-on."""
+    try:
+        sock = socket.create_connection((WHISPER_HOST, WHISPER_PORT), timeout=10)
+    except OSError as error:
+        raise TranscribeError(
+            "DARTCHAT_NO_WHISPER",
+            f"The Whisper add-on is not reachable at {WHISPER_HOST}:{WHISPER_PORT} ({error}).",
+        )
+    with sock:
+        # A long message on a small computer takes a while.
+        sock.settimeout(600)
+        stream = sock.makefile("rb")
+        audio = {"rate": 16000, "width": 2, "channels": 1}
+        wyoming_send(sock, "transcribe", {"language": language} if language else {})
+        wyoming_send(sock, "audio-start", audio)
+        chunk = 32000  # one second
+        for start in range(0, len(pcm), chunk):
+            wyoming_send(sock, "audio-chunk", audio, pcm[start:start + chunk])
+        wyoming_send(sock, "audio-stop", {})
+        while True:
+            kind, data = wyoming_read(stream)
+            if kind == "transcript":
+                return (data.get("text") or "").strip()
+            if kind == "error":
+                raise TranscribeError("DARTCHAT_WHISPER_FAILED", data.get("text") or "Whisper failed.")
+
+
+def transcribe_worker():
+    """One message at a time, so Whisper never fights itself for the CPU."""
+    while True:
+        with transcribe_wake:
+            while not transcribe_queue:
+                transcribe_wake.wait()
+            job_id = transcribe_queue.pop(0)
+            job = transcribe_jobs.get(job_id)
+            if not job:
+                continue
+            job["status"] = "working"
+            audio = job.pop("audio")
+            language = job["language"]
+        started = time.time()
+        try:
+            text = whisper_text(to_pcm(audio), language)
+            if WHISPER_LATIN:
+                text = to_latin(text)
+            update = {"status": "done", "text": text}
+            log(f"Voice message turned into text in {time.time() - started:.1f} s")
+        except TranscribeError as error:
+            update = {"status": "failed", "errcode": error.code, "error": error.message}
+            log(f"Voice message to text failed: {error.message}")
+        except Exception as error:  # Keep the worker alive.
+            update = {"status": "failed", "errcode": "M_UNKNOWN", "error": "Something went wrong."}
+            log(f"Voice message to text failed: {error!r}")
+        with transcribe_lock:
+            job.update(update)
+            job["finished"] = time.time()
+
+
+def forget_old_transcripts(now):
+    for job_id, job in list(transcribe_jobs.items()):
+        if now - job["created"] > TRANSCRIBE_KEEP_SECONDS and job["status"] in ("done", "failed"):
+            del transcribe_jobs[job_id]
+
+
+def start_transcribe(handler, body):
+    global transcribe_worker_started
+    user_id, _ = caller(handler)
+    audio_text = body.get("audio")
+    language = body.get("language") or WHISPER_LANGUAGE
+    if not isinstance(audio_text, str) or not audio_text:
+        raise ApiError(400, "M_BAD_JSON", "Send the sound as base64 in 'audio'.")
+    if not isinstance(language, str) or not re.fullmatch(r"[a-z]{2,3}|auto", language):
+        raise ApiError(400, "M_BAD_JSON", "Unknown language.")
+    try:
+        audio = base64.b64decode(audio_text, validate=True)
+    except ValueError:
+        raise ApiError(400, "M_BAD_JSON", "The sound is not valid base64.")
+    if not audio or len(audio) > TRANSCRIBE_MAX_BYTES:
+        raise ApiError(413, "M_TOO_LARGE", "The voice message is too long.")
+    now = time.time()
+    job_id = secrets.token_hex(12)
+    with transcribe_wake:
+        forget_old_transcripts(now)
+        waiting = [j for j in transcribe_jobs.values() if j["status"] in ("waiting", "working")]
+        if len(waiting) >= TRANSCRIBE_MAX_WAITING or sum(
+            1 for j in waiting if j["user"] == user_id
+        ) >= 5:
+            raise ApiError(429, "M_LIMIT_EXCEEDED", "Too many voice messages waiting; try again soon.")
+        transcribe_jobs[job_id] = {
+            "user": user_id,
+            "status": "waiting",
+            "audio": audio,
+            "language": None if language == "auto" else language,
+            "created": now,
+        }
+        transcribe_queue.append(job_id)
+        if not transcribe_worker_started:
+            threading.Thread(target=transcribe_worker, daemon=True).start()
+            transcribe_worker_started = True
+        transcribe_wake.notify()
+    return {"id": job_id, "status": "waiting"}
+
+
+def poll_transcribe(handler, body, job_id):
+    user_id, _ = caller(handler)
+    with transcribe_lock:
+        job = transcribe_jobs.get(job_id)
+        if not job or job["user"] != user_id:
+            raise ApiError(404, "M_NOT_FOUND", "No such voice message job.")
+        answer = {"id": job_id, "status": job["status"]}
+        for key in ("text", "errcode", "error"):
+            if key in job:
+                answer[key] = job[key]
+        if job["status"] in ("done", "failed"):
+            # The phone keeps the text itself; the server forgets it.
+            del transcribe_jobs[job_id]
+    return answer
+
+
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
     ("POST", re.compile(r"/register"), register),
@@ -2003,6 +2231,8 @@ ROUTES = [
     ("POST", re.compile(r"/link"), start_link),
     ("GET", re.compile(r"/link/([A-Za-z0-9_-]{22,64})"), poll_link),
     ("GET", re.compile(r"/link/([A-Za-z0-9_-]{22,64})/info"), link_info),
+    ("POST", re.compile(r"/transcribe"), start_transcribe),
+    ("GET", re.compile(r"/transcribe/([0-9a-f]{24})"), poll_transcribe),
     ("POST", re.compile(r"/link/([A-Za-z0-9_-]{22,64})/approve"), approve_link),
 ]
 
@@ -2044,6 +2274,8 @@ class Handler(BaseHTTPRequestHandler):
             if length > (
                 2 * 1024 * 1024 if guarded
                 else 256 * 1024 if path == PREFIX + "/scheduled"
+                # A voice message, base64 in JSON.
+                else 12 * 1024 * 1024 if path == PREFIX + "/transcribe"
                 else 16384
             ):
                 self.close_connection = True

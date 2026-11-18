@@ -179,36 +179,46 @@ def circles_test(owner, join):
         ),
         404,
     )
-    # Groups: only the owner creates them and adds people. Everyone else
-    # keeps conversations between two people.
-    expect(create_room(sam, []), 403, errcode="M_FORBIDDEN")
-    expect(
+    # Groups: friends make them with people from their own circle; the
+    # owner may be in any group.
+    expect(create_room(early, ["boss"]), 200)  # private chat with the owner
+    expect(create_room(early, ["boss", "boss"]), 403, errcode="DARTCHAT_NOT_ONE_CIRCLE")
+    expect(create_room(sam, []), 200)
+    party = expect(
         call("POST", MATRIX + "/createRoom", {"name": "Party", "invite": ["@sue:chat.test"]}, sam),
-        403,
-        errcode="M_FORBIDDEN",
-    )
-    expect(call("POST", MATRIX + "/createRoom", "nonsense", sam), 400)
-    expect(call("POST", invite_path, {"user_id": "@boss:chat.test"}, sam), 403)
+        200,
+    )["room_id"]
     expect(
         call(
-            "PUT",
-            f"{MATRIX}/rooms/{room}/state/m.room.member/@boss:chat.test",
-            {"membership": "invite"},
+            "POST",
+            MATRIX + "/createRoom",
+            {"name": "Open", "invite": ["@sue:chat.test"], "preset": "public_chat"},
             sam,
         ),
         403,
-        errcode="M_FORBIDDEN",
+        errcode="DARTCHAT_NOT_ONE_CIRCLE",
     )
+    expect(call("POST", MATRIX + "/createRoom", "nonsense", sam), 400)
+    expect(call("POST", f"{MATRIX}/rooms/{party}/invite", {"user_id": "@boss:chat.test"}, sam), 200)
+    # Who sam can pick from: the circle and the owner.
+    people = expect(call("GET", INVITE + "/people", token=sam), 200)
+    assert people["people"] == ["@boss:chat.test", "@sue:chat.test"], people
+    assert people["groups"] is True and people["owner"] is False, people
+    assert [c["name"] for c in people["circles"]] == ["School"], people
+    lonely = expect(call("GET", INVITE + "/people", token=early), 200)
+    assert lonely["people"] == ["@boss:chat.test"] and lonely["groups"] is False, lonely
+    everyone = expect(call("GET", INVITE + "/people", token=owner), 200)
+    assert everyone["owner"] is True and everyone["groups"] is True, everyone
+    assert {"@sam:chat.test", "@wes:chat.test", "@early:chat.test"} <= set(
+        everyone["people"]
+    ), everyone
+    expect(call("GET", INVITE + "/people"), 401)
     expect(call("POST", invite_path, {}, sam), 400)
     club = expect(create_room(owner, ["sam", "sue"]), 200)["room_id"]
     expect(call("POST", f"{MATRIX}/rooms/{club}/join", {}, sam), 200)
     expect(
         call("POST", f"{MATRIX}/rooms/{club}/invite", {"user_id": "@early:chat.test"}, sam),
         404,
-    )
-    expect(
-        call("POST", f"{MATRIX}/rooms/{club}/invite", {"user_id": "@boss:chat.test"}, sam),
-        403,
     )
     expect(
         call("POST", f"{MATRIX}/rooms/{club}/invite", {"user_id": "@early:chat.test"}, owner),
@@ -244,6 +254,21 @@ def circles_test(owner, join):
         200,
     )
     expect(create_room(sue, ["wes"]), 200)
+    # sue is in both circles, but a group stays inside one of them.
+    expect(create_room(sue, ["sam", "wes"]), 403, errcode="DARTCHAT_NOT_ONE_CIRCLE")
+    duo = expect(create_room(sue, ["sam"]), 200)["room_id"]
+    duo_invite = f"{MATRIX}/rooms/{duo}/invite"
+    expect(call("POST", duo_invite, {"user_id": "@wes:chat.test"}, sue), 403)
+    expect(
+        call(
+            "PUT",
+            f"{MATRIX}/rooms/{duo}/state/m.room.member/@wes:chat.test",
+            {"membership": "invite"},
+            sue,
+        ),
+        403,
+        errcode="DARTCHAT_NOT_ONE_CIRCLE",
+    )
     expect(call("DELETE", f"{INVITE}/admin/circles/{work}", token=owner), 200)
     expect(profile(sue, "wes"), 200)  # they share a chat now
     expect(create_room(sue, ["wes"]), 404)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.0
+
+- Friends can make groups now, not just the owner: a group (or an invitation into one) is allowed when everyone in it, apart from the owners and the group bot, is in one circle together with the person making it. Mixing two circles, public groups and groups from an account in no circle are refused with `DARTCHAT_NOT_ONE_CIRCLE`. The owner may still make any group.
+- New `GET /_dartchat/v1/people`: the people the signed-in account can start a chat with (the owner: every account; a friend: their circles and the owners; while no circle exists: everyone), whether they may make groups, and their own circles, for the app's pick lists.
+
 ## 0.18.0
 
 - "Show when I am online" switched off in the app now really hides it: friends asking the server get "offline" with no "last seen" time. The app sends `dartchat_hidden` with its own presence update; the front door keeps the list in `/data/hidden_presence.json` and takes the field off before the chat server sees it.

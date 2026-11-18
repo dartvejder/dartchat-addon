@@ -128,11 +128,13 @@ other in that chat.
 
 ## Who can make groups
 
-Only you, the owner, can create a group or add people to one. Everyone else
-can start a chat with one person inside their circle and accept the group
-invitations you send. The server enforces this, not just the app. Making a
-friend an admin of a group lets them remove people and change the group's
-name and picture, but not add anyone.
+You, the owner, can create any group and add anyone to it. A friend can
+create a group too, and add people to one, as long as the whole group stays
+inside one of their circles: everyone in it (apart from you and the group bot)
+must be in that one circle together. Someone in two circles cannot mix them
+in one group. An account in no circle makes no groups. Everyone can still
+start a chat with one person inside their circle. The server enforces this,
+not just the app.
 
 ## Group rules
 

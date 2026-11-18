@@ -456,6 +456,7 @@ def register(handler, body):
                     circle["members"].append(answer["user_id"])
         store.save()
     log(f"Invitation for {invite['email']} used by {answer['user_id']}")
+    account_cache["until"] = 0  # the new account shows up in the lists at once
     notify_joined(invite.get("created_by"))
     return {"user_id": answer["user_id"]}
 
@@ -543,6 +544,64 @@ def list_users(handler, body):
         if name not in (bot, BOT_USER, f"@{LINK_SENDER}:{SERVER_NAME}")
     ]
     return {"users": users}
+
+
+account_cache = {"ids": [], "until": 0}
+
+
+def all_accounts(token=None):
+    """Every account's user id, through the admin commands of [token] (an
+    owner's) or of the owner's latest sign-in. Kept for five minutes, since
+    each look-up is a command in the admin room. Empty when that fails."""
+    now = time.time()
+    with cache_lock:
+        if account_cache["until"] > now:
+            return list(account_cache["ids"])
+    try:
+        if token:
+            answer, _ = admin_command(token, "users list-users")
+        else:
+            answer, _ = _owner_admin_command("users list-users")
+    except ApiError:
+        return []
+    ids = re.findall(r"^(@\S+:\S+)$", answer, re.MULTILINE)
+    with cache_lock:
+        account_cache.update(ids=ids, until=now + 300)
+    return list(ids)
+
+
+def list_people(handler, body):
+    """The people the caller can start a chat with, and whether (and with
+    whom) they may make groups. The owner gets everyone and may make any
+    group; a friend gets the people in their circles (and the owners) and
+    may make groups inside one of their circles."""
+    user_id, token = caller(handler)
+    owner = is_owner(user_id, token)
+    with store.lock:
+        has_circles = bool(store.data["circles"])
+        owners = set(store.data["owners"])
+        deactivated = set(store.data["deactivated"])
+    circles = [] if owner else my_circles(user_id)
+    if owner:
+        require_admin(handler)  # finds the admin room for the command
+        people = set(all_accounts(token))
+    elif has_circles:
+        people = {m for circle in circles for m in circle["members"]} | owners
+    else:
+        # No circles yet: everyone sees everyone.
+        people = set(all_accounts()) | owners
+    hidden = {user_id, BOT_USER, f"@{LINK_SENDER}:{SERVER_NAME}"} | deactivated
+    if not owner:
+        # Circles never name people who are not in them any more.
+        for circle in circles:
+            circle["members"] = [m for m in circle["members"] if m not in deactivated]
+    return {
+        "people": sorted(p for p in people if p not in hidden and p.endswith(":" + SERVER_NAME)),
+        "owner": owner,
+        "groups": owner or bool(circles),
+        "circles": circles,
+        "owners": sorted(owners),
+    }
 
 
 def current_display_name(user_id, token):
@@ -891,30 +950,66 @@ def is_owner(user_id, token):
 
 
 def runs_groups(user_id, token):
-    """Whether [user_id] may create groups and add people to them."""
+    """Whether [user_id] may make any group and add anyone to it."""
     return user_id == BOT_USER or is_owner(user_id, token)
 
 
-def stays_private(room_id, token, target):
-    """Whether inviting [target] keeps the chat a conversation between two
-    people. Everyone may do that; only the owner makes anything larger."""
+def my_circles(user_id):
+    """The circles [user_id] is in."""
+    with store.lock:
+        return [
+            json.loads(json.dumps(circle))
+            for circle in store.data["circles"]
+            if user_id in circle["members"]
+        ]
+
+
+def one_circle(user_id, people):
+    """Whether [user_id] and all of [people] are in one circle together.
+    Owners and the group bot may be in any group, so they do not count.
+    Without any circle of their own nobody but the owner makes groups."""
+    with store.lock:
+        owners = set(store.data["owners"])
+    others = {
+        person
+        for person in people
+        if person not in owners and person not in (user_id, BOT_USER)
+    }
+    return any(
+        others <= set(circle["members"]) for circle in my_circles(user_id)
+    )
+
+
+def room_people(room_id, token):
+    """Everyone who is in, or invited to, [room_id]; None if unknown."""
     status, body = chat("GET", f"/rooms/{quote(room_id)}/members", token=token)
     if status != 200:
-        return False
-    people = {
+        return None
+    return {
         event.get("state_key")
         for event in body.get("chunk", [])
         if event.get("content", {}).get("membership") in ("join", "invite")
     }
+
+
+def may_add(user_id, token, room_id, target):
+    """Whether [user_id] may invite [target] into [room_id]: the owner always;
+    anyone else when it stays a chat between two people, or when the whole
+    group stays inside one of their circles."""
+    if runs_groups(user_id, token):
+        return True
+    people = room_people(room_id, token)
+    if people is None:
+        return False
     people.add(target)
-    return len(people) <= 2
+    return len(people) <= 2 or one_circle(user_id, people)
 
 
-OWNER_ONLY = (
+NOT_ONE_CIRCLE = (
     403,
     {
-        "errcode": "M_FORBIDDEN",
-        "error": "Only the owner creates groups and adds people to them.",
+        "errcode": "DARTCHAT_NOT_ONE_CIRCLE",
+        "error": "A group can only have people from one of your circles.",
     },
 )
 
@@ -1010,17 +1105,18 @@ def guard(handler, match, raw):
             isinstance(t, str) and may_contact(user_id, t) for t in invited
         ):
             return as_json(*NOT_FOUND)
-        private = (
-            body.get("is_direct") is True
-            and isinstance(invited, list)
-            and len(invited) <= 1
+        closed = (
+            isinstance(invited, list)
             and not body.get("invite_3pid")
             and body.get("visibility", "private") == "private"
             and body.get("preset") != "public_chat"
             and not body.get("room_alias_name")
         )
+        private = closed and body.get("is_direct") is True and len(invited) <= 1
         if not private and not runs_groups(user_id, token):
-            return as_json(*OWNER_ONLY)
+            # Friends make closed groups, all from one circle of theirs.
+            if not closed or not one_circle(user_id, invited):
+                return as_json(*NOT_ONE_CIRCLE)
     elif match["create"] and method == "POST":
         return as_json(400, {"errcode": "M_BAD_JSON", "error": "Not valid JSON."})
     elif match["invite"] and method == "POST":
@@ -1030,20 +1126,16 @@ def guard(handler, match, raw):
         if not may_contact(user_id, target):
             return as_json(*NOT_FOUND)
         room_id = urllib.parse.unquote(match["invite_room"])
-        if not runs_groups(user_id, token) and not stays_private(
-            room_id, token, target
-        ):
-            return as_json(*OWNER_ONLY)
+        if not may_add(user_id, token, room_id, target):
+            return as_json(*NOT_ONE_CIRCLE)
     elif match["member"] and method == "PUT" and body is not None:
         target = urllib.parse.unquote(match["member"])
         if body.get("membership") == "invite":
             if not may_contact(user_id, target):
                 return as_json(*NOT_FOUND)
             room_id = urllib.parse.unquote(match["member_room"])
-            if not runs_groups(user_id, token) and not stays_private(
-                room_id, token, target
-            ):
-                return as_json(*OWNER_ONLY)
+            if not may_add(user_id, token, room_id, target):
+                return as_json(*NOT_ONE_CIRCLE)
     elif match["keys"] and method == "POST" and body is not None:
         field = "device_keys" if match["keys"] == "query" else "one_time_keys"
         wanted = body.get(field)
@@ -2346,6 +2438,7 @@ ROUTES = [
     ("POST", re.compile(r"/admin/circles"), create_circle),
     ("PUT", re.compile(r"/admin/circles/([0-9a-f]{16})"), update_circle),
     ("DELETE", re.compile(r"/admin/circles/([0-9a-f]{16})"), delete_circle),
+    ("GET", re.compile(r"/people"), list_people),
     ("GET", re.compile(r"/scheduled"), list_scheduled),
     ("POST", re.compile(r"/scheduled"), create_scheduled),
     ("DELETE", re.compile(r"/scheduled/([0-9a-f]{16})"), cancel_scheduled),

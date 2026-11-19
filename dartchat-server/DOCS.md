@@ -13,7 +13,9 @@ content.
 | `firebase_service_account` | Turns on phone notifications. Paste the whole contents of the Firebase service account key file (JSON). Leave empty for no notifications. |
 | `resend_api_key` | Lets the server send invitation emails through Resend. Leave empty to pass invitation codes on yourself. |
 | `invite_email_from` | Sender of invitation emails, for example `Dart Chat <invites@example.com>`. Empty uses `invites@` your domain. |
-| `app_link` | Optional link, put in invitation emails, to where friends install the app. |
+| `app_link` | Optional link, put in invitation emails, to where Android friends install the app (Google Play). |
+| `iphone_link` | Where iPhone friends get the app, like a public TestFlight link. |
+| `web_link` | Address of the web app, like `https://web.dartchat.trade`. Invitations then get a web button, Windows and Linux buttons, and one smart link (`<web_link>/join.html#CODE`) that shows each phone the right steps. |
 | `max_upload_mb` | Largest photo or file upload, in megabytes. Default 20. |
 | `log_level` | How much the server logs: `error`, `warn`, `info` or `debug`. |
 | `storage_report_email` | Where to send the daily storage email. Empty turns the email off. Needs `resend_api_key`. |

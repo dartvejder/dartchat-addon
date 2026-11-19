@@ -38,6 +38,10 @@ RESEND_KEY = os.environ.get("DARTCHAT_RESEND_KEY", "")
 RESEND_BASE = os.environ.get("DARTCHAT_RESEND_BASE", "https://api.resend.com")
 EMAIL_FROM = os.environ.get("DARTCHAT_INVITE_FROM", "")
 APP_LINK = os.environ.get("DARTCHAT_APP_LINK", "")
+# Where iPhone friends get the app (a public TestFlight link) and where the web
+# app lives. The web address also serves the invitation page, join.html.
+IPHONE_LINK = os.environ.get("DARTCHAT_IPHONE_LINK", "")
+WEB_LINK = os.environ.get("DARTCHAT_WEB_LINK", "").rstrip("/")
 PORT = int(os.environ.get("DARTCHAT_INVITE_PORT", "6168"))
 STORE = os.environ.get("DARTCHAT_INVITE_STORE", "/data/invites.json")
 # The push gateway on this machine, used to tell an owner's phone that
@@ -57,6 +61,16 @@ SHARED_TOKEN = os.environ.get("DARTCHAT_SHARED_TOKEN", "") == "1"
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 8
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# An invitation code stops working this long after it was last sent.
+INVITE_DAYS = 7
+# What the inviter can pick: the friend's device, and how the invitation goes
+# out. The app shows the link and QR code itself; only email leaves from here.
+PLATFORMS = ("android", "iphone", "web", "computer")
+CHANNELS = ("email", "link", "qr")
+# How often the email service is asked whether an invitation email arrived.
+EMAIL_CHECK_SECONDS = 300
+FINAL_EMAIL_STATES = ("delivered", "bounced", "complained", "opened", "clicked")
 
 # Wrong codes allowed per address and in total, per ten minutes.
 WINDOW_SECONDS = 600
@@ -127,7 +141,13 @@ class Store:
     def __init__(self, path):
         self.path = path
         self.lock = threading.Lock()
-        self.data = {"invites": [], "deactivated": [], "circles": [], "owners": []}
+        self.data = {
+            "invites": [],
+            "deactivated": [],
+            "circles": [],
+            "owners": [],
+            "play_testers": [],
+        }
         if os.path.exists(path):
             with open(path, encoding="utf-8") as handle:
                 self.data.update(json.load(handle))
@@ -322,39 +342,162 @@ def default_sender():
     return f"Dart Chat <invites@{domain}>"
 
 
-def send_invite_email(email, code, inviter):
-    """Returns None when sent, or a short reason when it was not."""
-    if not RESEND_KEY:
-        return "Email sending is not set up on the server."
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def join_link(code):
+    """The one link that leads a friend through everything, or "" when the
+    web address is not set."""
+    return f"{WEB_LINK}/join.html#{format_code(code)}" if WEB_LINK else ""
+
+
+def platform_links(code, platforms):
+    """(label, address) for each place to get the app, for the chosen
+    devices. No devices chosen means all of them."""
+    wanted = platforms or PLATFORMS
+    links = []
+    if "android" in wanted and APP_LINK:
+        links.append(("Android (Google Play)", APP_LINK))
+    if "iphone" in wanted and IPHONE_LINK:
+        links.append(("iPhone (TestFlight)", IPHONE_LINK))
+    if "web" in wanted and WEB_LINK:
+        links.append(("Web, in the browser", f"{WEB_LINK}/?invite={code}"))
+    if "computer" in wanted and WEB_LINK:
+        links.append(("Windows", f"{WEB_LINK}/windows/"))
+        links.append(("Linux", f"{WEB_LINK}/linux/"))
+    return links
+
+
+def desktop_note(code, platforms):
+    """The computer versions, always offered as a side note when the main
+    buttons do not already show them."""
+    if not WEB_LINK or not platforms or "computer" in platforms:
+        return []
+    note = [("Windows", f"{WEB_LINK}/windows/"), ("Linux", f"{WEB_LINK}/linux/")]
+    if "web" not in platforms:
+        note.append(("Web", f"{WEB_LINK}/?invite={code}"))
+    return note
+
+
+def invite_email(code, inviter, platforms):
+    """Returns (text, html) of the invitation email."""
     shown = format_code(code)
-    steps = [
-        "Install the Dart Chat app" + (f": {APP_LINK}" if APP_LINK else "."),
-        'Open it and tap "I have an invitation code".',
-        f"Enter the code {shown} and pick a username and password.",
-    ]
-    text = (
-        f"{inviter} invited you to Dart Chat, a private chat for friends.\n\n"
-        f"Your invitation code: {shown}\n\n"
-        + "\n".join(f"{n}. {step}" for n, step in enumerate(steps, 1))
-        + "\n\nThe code works once and only for you."
-        " If you did not expect this email, you can ignore it.\n"
-    )
+    links = platform_links(code, platforms)
+    joining = join_link(code)
+    only_iphone = list(platforms) == ["iphone"]
 
     def esc(value):
         return (
             value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;")
         )
 
-    html = (
-        '<div style="font-family:sans-serif;font-size:16px;line-height:1.5">'
-        f"<p>{esc(inviter)} invited you to Dart Chat, a private chat for friends.</p>"
-        "<p>Your invitation code:</p>"
-        '<p style="font-size:28px;font-weight:bold;letter-spacing:2px">'
-        f"{shown}</p><ol>"
-        + "".join(f"<li>{esc(step)}</li>" for step in steps)
-        + "</ol><p>The code works once and only for you. If you did not expect"
-        " this email, you can ignore it.</p></div>"
+    text_lines = [
+        f"{inviter} invited you to Dart Chat, a private chat for friends.",
+        "",
+        f"Your invitation code: {shown}",
+        "",
+    ]
+    if joining:
+        text_lines += ["Easiest: open this link on your phone and follow it:", joining, ""]
+    if links:
+        text_lines.append("1. Get the app:")
+        text_lines += [f"   {label}: {url}" for label, url in links]
+    else:
+        text_lines.append("1. Install the Dart Chat app.")
+    if any(label.startswith("iPhone") for label, _ in links):
+        text_lines.append(
+            "   iPhone: first install TestFlight from the App Store, then open the iPhone link."
+        )
+    extras = desktop_note(code, platforms)
+    if extras:
+        text_lines.append(
+            "   Also on a computer: " + ", ".join(f"{label} {url}" for label, url in extras)
+        )
+    text_lines += [
+        '2. Open it and tap "I have an invitation code".',
+        f"3. Enter the code {shown} and pick a username and password.",
+        "",
+        f"The code works once, only for you, for {INVITE_DAYS} days."
+        " If you did not expect this email, you can ignore it.",
+    ]
+    text = "\n".join(text_lines) + "\n"
+
+    colours = {
+        "Android": ("#a3e635", "#14213d"),
+        "iPhone": ("#14213d", "#ffffff"),
+        "Web": ("#14b8a6", "#ffffff"),
+        "Windows": ("#e2e8f0", "#14213d"),
+        "Linux": ("#e2e8f0", "#14213d"),
+    }
+
+    def button(label, url, background, colour):
+        return (
+            '<a href="' + esc(url) + '" style="display:block;margin:0 0 10px;'
+            f"padding:13px 16px;border-radius:12px;background:{background};"
+            f"color:{colour};font-weight:bold;text-decoration:none;"
+            'text-align:center;font-size:16px">' + esc(label) + "</a>"
+        )
+
+    parts = [
+        '<div style="font-family:sans-serif;font-size:16px;line-height:1.5;'
+        'max-width:520px;color:#14213d">',
+        f'<p style="font-size:20px;font-weight:bold">{esc(inviter)} invited you to'
+        " Dart Chat 🎯</p>",
+        "<p>A private chat for friends. Your invitation code:</p>",
+        '<p style="font-size:30px;font-weight:bold;letter-spacing:3px;'
+        'background:#f1f5f9;border-radius:12px;padding:10px;text-align:center">'
+        f"{shown}</p>",
+    ]
+    if joining:
+        parts.append("<p><b>Easiest:</b> open this on your phone, it shows the right"
+                     " steps for it and fills in the code:</p>")
+        parts.append(button("Open my invitation", joining, "#14213d", "#a3e635"))
+    if links:
+        parts.append("<p><b>1. Get the app</b> for your device:</p>")
+        for label, url in links:
+            background, colour = colours[label.split(" ")[0].rstrip(",")]
+            parts.append(button(label, url, background, colour))
+        if any(label.startswith("iPhone") for label, _ in links):
+            parts.append(
+                '<p style="font-size:14px;color:#64748b">iPhone: first install'
+                " <b>TestFlight</b> from the App Store, then tap the iPhone button.</p>"
+            )
+    else:
+        parts.append("<p><b>1.</b> Install the Dart Chat app.</p>")
+    parts.append(
+        '<p><b>2.</b> Open it and tap "I have an invitation code".<br>'
+        f"<b>3.</b> Enter the code {shown} and pick a username and password.</p>"
     )
+    if extras:
+        parts.append(
+            '<p style="font-size:14px;color:#475569;background:#f1f5f9;'
+            'border-radius:10px;padding:10px 12px">💻 You can also use Dart Chat'
+            " on a computer: "
+            + " · ".join(
+                f'<a href="{esc(url)}" style="color:#0f766e;font-weight:bold">'
+                f"{esc(label)}</a>"
+                for label, url in extras
+            )
+            + "</p>"
+        )
+    parts.append(
+        f'<p style="font-size:14px;color:#64748b">The code works once, only for'
+        f" you, for {INVITE_DAYS} days. If you did not expect this email, you can"
+        " ignore it.</p></div>"
+    )
+    if only_iphone and not IPHONE_LINK:
+        log("An iPhone invitation went out without an iPhone link; set iphone_link")
+    return text, "".join(parts)
+
+
+def send_invite_email(email, code, inviter, platforms=()):
+    """Returns (None, email id) when sent, or (a short reason, None) when it
+    was not."""
+    if not RESEND_KEY:
+        return "Email sending is not set up on the server.", None
+    text, html = invite_email(code, inviter, list(platforms))
     try:
         status, body = http_json(
             "POST",
@@ -362,7 +505,7 @@ def send_invite_email(email, code, inviter):
             {
                 "from": EMAIL_FROM or default_sender(),
                 "to": [email],
-                "subject": "Your invitation to Dart Chat",
+                "subject": f"{inviter} invited you to Dart Chat",
                 "text": text,
                 "html": html,
             },
@@ -370,26 +513,50 @@ def send_invite_email(email, code, inviter):
         )
     except (urllib.error.URLError, OSError) as error:
         log(f"Email service unreachable: {error}")
-        return "The email service could not be reached."
+        return "The email service could not be reached.", None
     if status in (200, 201, 202):
-        return None
+        return None, body.get("id") if isinstance(body, dict) else None
     reason = str(body.get("message") or f"error {status}")[:200]
     log(f"Email service refused the invitation email: {status} {reason}")
-    return f"The email service refused it: {reason}"
+    return f"The email service refused it: {reason}", None
+
+
+def is_expired(invite, now=None):
+    until = invite.get("expires_at")
+    return bool(until) and (now or now_ms()) > until
+
+
+def on_play_list(email):
+    return bool(email) and email in store.data.get("play_testers", [])
 
 
 def public_invite(invite):
+    status = invite["status"]
+    if status == "pending" and is_expired(invite):
+        status = "expired"
     shown = {
         "id": invite["id"],
         "email": invite["email"],
-        "status": invite["status"],
+        "name": invite.get("name", ""),
+        "status": status,
         "created_at": invite["created_at"],
         "email_sent": invite.get("email_sent", False),
+        "platforms": invite.get("platforms", []),
+        "channels": invite.get("channels", ["email"] if invite["email"] else []),
+        "sends": len(invite.get("sends", [])) or 1,
+        "on_play_list": on_play_list(invite["email"]),
     }
+    if invite.get("expires_at"):
+        shown["expires_at"] = invite["expires_at"]
+    if invite.get("sent_at"):
+        shown["sent_at"] = invite["sent_at"]
     if invite.get("email_error"):
         shown["email_error"] = invite["email_error"]
-    if invite["status"] == "pending":
+    if invite.get("email_state"):
+        shown["email_state"] = invite["email_state"]
+    if status == "pending":
         shown["code"] = format_code(invite["code"])
+        shown["link"] = join_link(invite["code"])
     if invite.get("used_by"):
         shown["used_by"] = invite["used_by"]
     shown["circles"] = invite.get("circles", [])
@@ -400,7 +567,15 @@ def public_invite(invite):
 
 
 def get_status(handler, body):
-    return {"invites": True, "email": bool(RESEND_KEY)}
+    return {
+        "invites": True,
+        "email": bool(RESEND_KEY),
+        "links": {
+            "android": APP_LINK,
+            "iphone": IPHONE_LINK,
+            "web": WEB_LINK,
+        },
+    }
 
 
 def register(handler, body):
@@ -424,6 +599,12 @@ def register(handler, body):
             limiter.record(address)
             raise ApiError(
                 403, "DARTCHAT_INVALID_CODE", "That invitation code is not valid."
+            )
+        if is_expired(invite):
+            raise ApiError(
+                403,
+                "DARTCHAT_INVITE_EXPIRED",
+                "That invitation has expired. Ask for a new one.",
             )
         request = {"username": username, "password": password, "inhibit_login": True}
         status, answer = chat("POST", "/register", request)
@@ -458,21 +639,112 @@ def register(handler, body):
     log(f"Invitation for {invite['email']} used by {answer['user_id']}")
     account_cache["until"] = 0  # the new account shows up in the lists at once
     notify_joined(invite.get("created_by"))
-    return {"user_id": answer["user_id"]}
+    # The app opens a chat with whoever sent the invitation.
+    return {"user_id": answer["user_id"], "inviter": invite.get("created_by")}
+
+
+def refresh_email_states():
+    """Asks the email service whether recent invitation emails arrived or
+    bounced. A few at a time, at most every few minutes per email."""
+    if not RESEND_KEY:
+        return
+    now = time.time()
+    with store.lock:
+        due = [
+            (invite["id"], invite["email_id"])
+            for invite in store.data["invites"]
+            if invite["status"] == "pending"
+            and invite.get("email_id")
+            and invite.get("email_state") not in FINAL_EMAIL_STATES
+            and now - invite.get("email_checked", 0) > EMAIL_CHECK_SECONDS
+        ][-8:]
+    found = {}
+    for invite_id, email_id in due:
+        try:
+            status, body = http_json(
+                "GET",
+                f"{RESEND_BASE}/emails/{quote(email_id)}",
+                None,
+                {"Authorization": f"Bearer {RESEND_KEY}"},
+                timeout=5,
+            )
+        except (urllib.error.URLError, OSError):
+            break
+        state = body.get("last_event") if status == 200 else None
+        found[invite_id] = state if isinstance(state, str) else None
+    if not found:
+        return
+    with store.lock:
+        for invite in store.data["invites"]:
+            if invite["id"] in found:
+                invite["email_checked"] = now
+                if found[invite["id"]]:
+                    invite["email_state"] = found[invite["id"]]
+        store.save()
 
 
 def list_invites(handler, body):
     require_admin(handler)
+    refresh_email_states()
     with store.lock:
         invites = [public_invite(i) for i in reversed(store.data["invites"])]
     return {"invites": invites, "email": bool(RESEND_KEY)}
 
 
+def clean_choice(body, key, allowed, default):
+    wanted = body.get(key, default)
+    if not isinstance(wanted, list) or any(item not in allowed for item in wanted):
+        raise ApiError(400, "M_INVALID_PARAM", f"{key} must be a list of: {', '.join(allowed)}.")
+    return [item for item in allowed if item in wanted]
+
+
+def clean_email(value):
+    email = str(value or "").strip().lower()
+    if email and (len(email) > 254 or not EMAIL_PATTERN.match(email)):
+        raise ApiError(400, "DARTCHAT_INVALID_EMAIL", "That is not an email address.")
+    return email
+
+
+def deliver(invite, channels, inviter):
+    """Sends the invitation out on [channels] and notes it. Call without the
+    store lock: email goes over the network."""
+    sent_at = now_ms()
+    problem, email_id = None, None
+    if "email" in channels:
+        problem, email_id = send_invite_email(
+            invite["email"], invite["code"], inviter, invite.get("platforms", [])
+        )
+    with store.lock:
+        invite["channels"] = list(channels)
+        invite["sent_at"] = sent_at
+        invite.setdefault("sends", []).append({"at": sent_at, "channels": list(channels)})
+        if "email" in channels:
+            invite["email_sent"] = problem is None
+            invite.pop("email_error", None)
+            invite.pop("email_state", None)
+            invite.pop("email_checked", None)
+            invite.pop("email_id", None)
+            if problem:
+                invite["email_error"] = problem
+            if email_id:
+                invite["email_id"] = email_id
+        store.save()
+        return public_invite(invite)
+
+
 def create_invite(handler, body):
     user_id, token = require_admin(handler)
-    email = str(body.get("email", "")).strip().lower()
-    if len(email) > 254 or not EMAIL_PATTERN.match(email):
-        raise ApiError(400, "DARTCHAT_INVALID_EMAIL", "That is not an email address.")
+    email = clean_email(body.get("email"))
+    name = str(body.get("name", "")).strip()[:60]
+    # Older apps send only an email address.
+    channels = clean_choice(body, "channels", CHANNELS, ["email"])
+    platforms = clean_choice(body, "platforms", PLATFORMS, [])
+    if not channels:
+        raise ApiError(400, "M_INVALID_PARAM", "Pick how to send the invitation.")
+    if "email" in channels and not email:
+        raise ApiError(400, "DARTCHAT_INVALID_EMAIL", "Enter an email address to send it by email.")
+    if not email and not name:
+        raise ApiError(400, "M_INVALID_PARAM", "Enter a name or an email address.")
     wanted = body.get("circles", [])
     if not isinstance(wanted, list):
         raise ApiError(400, "M_INVALID_PARAM", "circles must be a list.")
@@ -481,28 +753,77 @@ def create_invite(handler, body):
         if any(circle_id not in known for circle_id in wanted):
             raise ApiError(400, "DARTCHAT_NO_CIRCLE", "That circle does not exist.")
         # Inviting the same address again replaces the earlier unused code.
-        for old in store.data["invites"]:
-            if old["status"] == "pending" and old["email"] == email:
-                old["status"] = "revoked"
+        if email:
+            for old in store.data["invites"]:
+                if old["status"] == "pending" and old["email"] == email:
+                    old["status"] = "revoked"
+        created = now_ms()
         invite = {
             "id": secrets.token_hex(8),
             "email": email,
+            "name": name,
             "code": store.new_code(),
             "status": "pending",
-            "created_at": int(time.time() * 1000),
+            "created_at": created,
+            "expires_at": created + INVITE_DAYS * 86400_000,
             "created_by": user_id,
             "circles": list(wanted),
+            "platforms": platforms,
             "email_sent": False,
         }
         store.data["invites"].append(invite)
         store.save()
-    problem = send_invite_email(email, invite["code"], display_name(user_id, token))
+    return deliver(invite, channels, display_name(user_id, token))
+
+
+def resend_invite(handler, body, invite_id):
+    """Sends an invitation again, on channels picked anew. An expired or
+    cancelled one gets a fresh code; a waiting one keeps its code and gets
+    another week."""
+    user_id, token = require_admin(handler)
+    channels = clean_choice(body, "channels", CHANNELS, [])
+    if not channels:
+        raise ApiError(400, "M_INVALID_PARAM", "Pick how to send the invitation.")
     with store.lock:
-        invite["email_sent"] = problem is None
-        if problem:
-            invite["email_error"] = problem
+        invite = next((i for i in store.data["invites"] if i["id"] == invite_id), None)
+        if invite is None:
+            raise ApiError(404, "M_NOT_FOUND", "No such invitation.")
+        if invite["status"] == "used":
+            raise ApiError(409, "DARTCHAT_INVITE_USED", "That invitation was already used.")
+        email = clean_email(body.get("email")) or invite["email"]
+        if "email" in channels and not email:
+            raise ApiError(400, "DARTCHAT_INVALID_EMAIL", "Enter an email address to send it by email.")
+        if "platforms" in body:
+            invite["platforms"] = clean_choice(body, "platforms", PLATFORMS, [])
+        if email != invite["email"]:
+            for old in store.data["invites"]:
+                if old is not invite and old["status"] == "pending" and old["email"] == email:
+                    old["status"] = "revoked"
+            invite["email"] = email
+        if invite["status"] != "pending" or is_expired(invite):
+            invite["code"] = store.new_code()
+            invite["status"] = "pending"
+        invite["expires_at"] = now_ms() + INVITE_DAYS * 86400_000
         store.save()
-        return public_invite(invite)
+    return deliver(invite, channels, display_name(user_id, token))
+
+
+def set_play_tester(handler, body):
+    """The owner notes that an address is (or is not) on the Play Store tester
+    list, which Android friends need before the Play link works."""
+    require_admin(handler)
+    email = clean_email(body.get("email"))
+    if not email:
+        raise ApiError(400, "DARTCHAT_INVALID_EMAIL", "That is not an email address.")
+    with store.lock:
+        testers = store.data.setdefault("play_testers", [])
+        if body.get("on", True):
+            if email not in testers:
+                testers.append(email)
+        elif email in testers:
+            testers.remove(email)
+        store.save()
+        return {"email": email, "on_play_list": email in testers}
 
 
 def revoke_invite(handler, body, invite_id):
@@ -2432,6 +2753,8 @@ ROUTES = [
     ("GET", re.compile(r"/admin/invites"), list_invites),
     ("POST", re.compile(r"/admin/invites"), create_invite),
     ("DELETE", re.compile(r"/admin/invites/([0-9a-f]{16})"), revoke_invite),
+    ("POST", re.compile(r"/admin/invites/([0-9a-f]{16})/resend"), resend_invite),
+    ("PUT", re.compile(r"/admin/play-testers"), set_play_tester),
     ("GET", re.compile(r"/admin/users"), list_users),
     ("POST", re.compile(r"/admin/users/deactivate"), deactivate_user),
     ("GET", re.compile(r"/admin/circles"), list_circles),

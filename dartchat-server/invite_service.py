@@ -454,6 +454,19 @@ def invite_email(code, inviter, platforms):
         'max-width:520px;color:#14213d">',
         f'<p style="font-size:20px;font-weight:bold">{esc(inviter)} invited you to'
         " Dart Chat 🎯</p>",
+    ]
+    if WEB_LINK:
+        # The poster, hosted on the web app's address, opens the invitation.
+        parts += [
+            '<a href="' + esc(joining) + '" style="display:block;text-decoration:none">'
+            f'<img src="{esc(WEB_LINK)}/invite-poster.jpg" width="520"'
+            ' alt="Dart Chat: Najglasniji chat u galaksiji. Preuzmi odmah!"'
+            ' style="display:block;width:100%;max-width:520px;height:auto;border:0;'
+            'border-radius:14px"></a>',
+            '<p style="font-size:12px;color:#94a3b8;margin:4px 0 14px;'
+            'text-align:center">*neke stvari su malo preuveličane 😄</p>',
+        ]
+    parts += [
         f"<p>{esc(intro)}</p><p>Your invitation code:</p>" if intro
         else "<p>A private chat for friends. Your invitation code:</p>",
         '<p style="font-size:30px;font-weight:bold;letter-spacing:3px;'

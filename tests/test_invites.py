@@ -173,3 +173,17 @@ def test_owner_words_in_the_invitation_email(monkeypatch):
     assert text.startswith("Dottore invited you to Dart Chat")
     assert svc.fill_inviter("{inviter} zove", "Ana") == "Ana zove"
     assert svc.fill_inviter("", "Ana") == ""
+
+
+def test_email_shows_the_poster_linking_to_the_invitation(owner):
+    _, html = svc.invite_email("ABCD2345", "Boss", ["android"])
+    poster = html.index('src="https://web.example/invite-poster.jpg"')
+    assert html.index("invited you to") < poster < html.index("Your invitation code")
+    assert '<a href="https://web.example/join.html#ABCD-2345"' in html
+    assert "malo preuveličane" in html
+
+
+def test_email_has_no_poster_without_a_web_address(owner, monkeypatch):
+    monkeypatch.setattr(svc, "WEB_LINK", "")
+    _, html = svc.invite_email("ABCD2345", "Boss", ["android"])
+    assert "invite-poster" not in html

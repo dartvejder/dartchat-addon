@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.0
+
+- The invitation email shows the Dart Chat poster under its first line, linked to the invitation, with a small "*neke stvari su malo preuveličane 😄" under it. The picture comes from `<web_link>/invite-poster.jpg`, so it shows only when `web_link` is set; nothing is attached to the email.
+
 ## 0.21.0
 
 - Looks from the server. The add-on now carries the app's themes, colour schemes, backgrounds, message marks and reply looks as data, plus new ones the app never had (themes Sveska, Svemir, Arkada and Strip, colour schemes Mint staklo, Beton and Oblak, picture backgrounds Doodle, Sveska and Zvezde, the Breskva gradient, marks Pivo, Pikado, Kafa and Semafor), three fonts (Comic Neue, Patrick Hand, Press Start 2P, all under the SIL Open Font License), a sticker pack and a GIF pack. New looks need only an add-on update from now on; apps from the next Dart Chat version on pick them up by themselves.

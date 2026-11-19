@@ -239,7 +239,13 @@ def circles_test(owner, join):
     mixed = expect(create_room(owner, ["sam", "wes"]), 200)["room_id"]
     expect(call("POST", f"{MATRIX}/rooms/{mixed}/join", {}, sam), 200)
     expect(call("POST", f"{MATRIX}/rooms/{mixed}/join", {}, wes), 200)
-    time.sleep(31)  # the shared-chat lookup is cached for half a minute
+    # The shared-chat lookup is cached for half a minute. Ask until it has
+    # run out rather than sleeping exactly that long: the clock inside the
+    # container on the PC runner can run a little slow.
+    time.sleep(30)
+    deadline = time.time() + 30
+    while profile(sam, "wes")[0] != 200 and time.time() < deadline:
+        time.sleep(1)
     expect(profile(sam, "wes"), 200)
     expect(create_room(sam, ["wes"]), 404)
 

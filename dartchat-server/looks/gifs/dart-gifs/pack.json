@@ -1,0 +1,22 @@
+{
+ "id": "dart-gifs",
+ "name": "Dart GIF-ovi",
+ "gifs": [
+  {
+   "id": "bullseye",
+   "file": "bullseye.gif"
+  },
+  {
+   "id": "hahaha",
+   "file": "hahaha.gif"
+  },
+  {
+   "id": "cosak",
+   "file": "cosak.gif"
+  },
+  {
+   "id": "bravo",
+   "file": "bravo.gif"
+  }
+ ]
+}

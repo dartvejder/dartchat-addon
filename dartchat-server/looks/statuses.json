@@ -1,0 +1,138 @@
+[
+ {
+  "id": "dots",
+  "name": "Three dots",
+  "draw": "dots",
+  "texts": [
+   "●○○",
+   "●●○",
+   "●●●"
+  ]
+ },
+ {
+  "id": "ticks",
+  "name": "Ticks",
+  "draw": "ticks",
+  "texts": [
+   "✓",
+   "✓✓",
+   "✔✔"
+  ]
+ },
+ {
+  "id": "circles",
+  "name": "Circles",
+  "draw": "circles",
+  "texts": [
+   "○",
+   "◎",
+   "●"
+  ]
+ },
+ {
+  "id": "darts",
+  "name": "Darts",
+  "draw": "darts",
+  "texts": [
+   ">",
+   ">>",
+   ">>>"
+  ]
+ },
+ {
+  "id": "bars",
+  "name": "Signal bars",
+  "draw": "bars",
+  "texts": [
+   "▂",
+   "▂▄",
+   "▂▄▆"
+  ]
+ },
+ {
+  "id": "hearts",
+  "name": "Hearts",
+  "draw": "hearts",
+  "texts": [
+   "♡",
+   "♡♡",
+   "♥♥"
+  ]
+ },
+ {
+  "id": "stars",
+  "name": "Stars",
+  "draw": "stars",
+  "texts": [
+   "☆",
+   "☆☆",
+   "★★"
+  ]
+ },
+ {
+  "id": "letters",
+  "name": "Letters",
+  "draw": "letters",
+  "texts": [
+   "[S]",
+   "[D]",
+   "[R]"
+  ]
+ },
+ {
+  "id": "moon",
+  "name": "Moon",
+  "draw": "moon",
+  "texts": [
+   "○",
+   "◐",
+   "●"
+  ]
+ },
+ {
+  "id": "battery",
+  "name": "Battery",
+  "draw": "battery",
+  "texts": [
+   "[▮▯▯]",
+   "[▮▮▯]",
+   "[▮▮▮]"
+  ]
+ },
+ {
+  "id": "pivo",
+  "name": "Pivo",
+  "texts": [
+   "🍺",
+   "🍺🍺",
+   "🍻"
+  ]
+ },
+ {
+  "id": "pikado",
+  "name": "Pikado",
+  "texts": [
+   "·",
+   "··",
+   "🎯"
+  ]
+ },
+ {
+  "id": "kafa",
+  "name": "Kafa",
+  "texts": [
+   "☕",
+   "☕☕",
+   "😎"
+  ]
+ },
+ {
+  "id": "semafor",
+  "name": "Semafor",
+  "texts": [
+   "🔴",
+   "🟡",
+   "🟢"
+  ]
+ }
+]

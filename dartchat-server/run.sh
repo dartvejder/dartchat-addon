@@ -23,6 +23,8 @@ WHISPER_HOST="$(opt whisper_host)"
 WHISPER_PORT="$(opt whisper_port)"
 WHISPER_LANGUAGE="$(opt whisper_language)"
 WHISPER_LATIN="$(jq -r 'if .whisper_latin == false then "false" else "true" end' "$OPTIONS")"
+INVITE_SUBJECT="$(opt invite_subject)"
+INVITE_INTRO="$(opt invite_intro)"
 
 if [ -z "$SERVER_NAME" ]; then
   echo "[dartchat] FATAL: set 'server_name' in the add-on configuration" >&2
@@ -115,6 +117,8 @@ keep_running() {
   export DARTCHAT_IPHONE_LINK="$IPHONE_LINK"
   export DARTCHAT_WEB_LINK="$WEB_LINK"
   export DARTCHAT_TIMEZONE="$TIMEZONE"
+  export DARTCHAT_INVITE_SUBJECT="$INVITE_SUBJECT"
+  export DARTCHAT_INVITE_INTRO="$INVITE_INTRO"
   # Voice messages to text, through the Whisper add-on (Wyoming protocol).
   export DARTCHAT_WHISPER_HOST="${WHISPER_HOST:-core-whisper}"
   export DARTCHAT_WHISPER_PORT="${WHISPER_PORT:-10300}"
@@ -142,6 +146,17 @@ keep_running() {
   keep_running "Group bot" python3 -m group_bot
 ) &
 unset RESEND_KEY REGISTRATION_TOKEN
+
+# Looks from the server: themes, colours, backgrounds, message marks, fonts,
+# stickers and GIFs, plus the owner's switches and notice. The apps fetch
+# the catalog and pick up a new look without a new app version. Packs of the
+# owner's own go in /share/dartchat/looks (same layout as /looks).
+DARTCHAT_FEATURES="$(opt features)" \
+DARTCHAT_BANNER="$(opt banner_text)" \
+DARTCHAT_QUICK_REACTIONS="$(opt quick_reactions)" \
+DARTCHAT_INVITE_SHARE_TEXT="$(opt invite_share_text)" \
+  python3 /looks_build.py /tmp/looks /looks /share/dartchat/looks \
+  || echo "[dartchat] Looks could not be prepared; the apps keep their own"
 
 # The web version runs on its own address (web.dartchat.trade), so the
 # browser asks first whether it may call this server. The chat server answers
@@ -186,6 +201,22 @@ http {
     location = /_dartchat/v1/webpush/key {
       include /tmp/cors-proxy.conf;
       proxy_pass http://127.0.0.1:5000;
+    }
+    # The look catalog and its files are plain files. The catalog is checked
+    # again each time (a tiny "nothing new" answer when it has not changed);
+    # files are named by their content and never change, so they are kept.
+    location = /_dartchat/v1/looks {
+      include /tmp/cors.conf;
+      add_header Cache-Control "no-cache" always;
+      default_type application/json;
+      gzip on;
+      gzip_types application/json;
+      alias /tmp/looks/catalog.json;
+    }
+    location /_dartchat/v1/looks/files/ {
+      include /tmp/cors.conf;
+      add_header Cache-Control "public, max-age=31536000, immutable" always;
+      alias /tmp/looks/files/;
     }
     location /_dartchat/v1/bot/ {
       include /tmp/cors-proxy.conf;

@@ -1,0 +1,38 @@
+{
+ "id": "dart-ekipa",
+ "name": "Dart ekipa",
+ "stickers": [
+  {
+   "id": "cosak",
+   "file": "cosak.png"
+  },
+  {
+   "id": "bravo",
+   "file": "bravo.png"
+  },
+  {
+   "id": "hahaha",
+   "file": "hahaha.png"
+  },
+  {
+   "id": "gde-ste",
+   "file": "gde-ste.png"
+  },
+  {
+   "id": "pikado",
+   "file": "pikado.png"
+  },
+  {
+   "id": "laku-noc",
+   "file": "laku-noc.png"
+  },
+  {
+   "id": "kafica",
+   "file": "kafica.png"
+  },
+  {
+   "id": "top",
+   "file": "top.png"
+  }
+ ]
+}

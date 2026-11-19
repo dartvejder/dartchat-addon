@@ -24,6 +24,8 @@ COPY run.sh /run.sh
 COPY push_gateway.py /push_gateway.py
 COPY invite_service.py /invite_service.py
 COPY storage_report.py /storage_report.py
+COPY looks_build.py /looks_build.py
+COPY looks /looks
 COPY --from=bot /opt/group_bot/lib /opt/group_bot/lib
 COPY group_bot /opt/group_bot/group_bot
 RUN chmod 0755 /run.sh

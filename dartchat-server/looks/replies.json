@@ -1,0 +1,44 @@
+[
+ {
+  "id": "classic",
+  "name": "Classic",
+  "description": "A grey strip with a line at its left, name and text in one line",
+  "draw": "classic"
+ },
+ {
+  "id": "card",
+  "name": "Colour card",
+  "description": "The name in bold in that person's colour, the text below, and a small picture when it answers a photo",
+  "draw": "card"
+ },
+ {
+  "id": "bubble",
+  "name": "Mini bubble",
+  "description": "A small bubble in the colour of the original, with the first letter of the name",
+  "draw": "bubble"
+ },
+ {
+  "id": "above",
+  "name": "Above the message",
+  "description": "Floats small above the bubble, joined to it by a curved line",
+  "draw": "above"
+ },
+ {
+  "id": "quotes",
+  "name": "Quote marks",
+  "description": "A big quote mark, the text in italics, signed with the name",
+  "draw": "quotes"
+ },
+ {
+  "id": "header",
+  "name": "Bubble header",
+  "description": "The top of the bubble, edge to edge, a shade darker",
+  "draw": "header"
+ },
+ {
+  "id": "dart",
+  "name": "Dart",
+  "description": "A thin frame in the person's colour and a dart pointing at the name",
+  "draw": "dart"
+ }
+]

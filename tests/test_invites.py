@@ -160,3 +160,16 @@ def test_register_names_the_inviter(owner, monkeypatch):
         FakeHandler(), {"code": shown["code"], "username": "pera", "password": "12345678"}
     )
     assert answer == {"user_id": "@pera:x", "inviter": "@boss:x"}
+
+
+def test_owner_words_in_the_invitation_email(monkeypatch):
+    monkeypatch.setattr(svc, "INVITE_INTRO", "{inviter} te zove na pikado i chat!")
+    text, html = svc.invite_email("ABCDEFG", "Dottore", ["android"])
+    assert text.startswith("Dottore te zove na pikado i chat!")
+    assert "Dottore te zove na pikado i chat!" in html
+    assert "A private chat for friends." not in html
+    monkeypatch.setattr(svc, "INVITE_INTRO", "")
+    text, _ = svc.invite_email("ABCDEFG", "Dottore", ["android"])
+    assert text.startswith("Dottore invited you to Dart Chat")
+    assert svc.fill_inviter("{inviter} zove", "Ana") == "Ana zove"
+    assert svc.fill_inviter("", "Ana") == ""

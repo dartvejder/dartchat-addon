@@ -268,3 +268,17 @@ Set up once:
 3. Nothing else is needed here: `whisper_host` (`core-whisper`), `whisper_port` (`10300`) and `whisper_language` (`sr`) already point at it. Use `auto` as the language to let Whisper guess. Whisper often writes Serbian in Cyrillic; with `whisper_latin` on (the default) the server turns it into Latin letters.
 
 One voice message is turned into text at a time; a phone waits its turn. Without the Whisper add-on the app says that turning voice into text is not set up.
+
+## Looks, stickers and switches from the server
+
+The app's themes, colour schemes, backgrounds, message marks, reply looks, fonts, stickers and GIFs come from this add-on. A new look needs only an add-on update; the apps (from the version released with this add-on on) see it in Settings the next time they start or within an hour. Each phone downloads a picture or font once, only when someone picks it, and keeps it for offline use. Without the server the app keeps the looks built into it.
+
+Your own packs go in `/share/dartchat/looks` (the `share` folder in Home Assistant), in the same layout as the add-on's own `looks` folder: `themes.json`, `schemes.json`, `backgrounds.json`, `statuses.json`, `fonts.json`, and folders `stickers/<pack>/pack.json` and `gifs/<pack>/pack.json` with their pictures. Restart the add-on after changing them. PNG, WebP, GIF, JPEG and TTF/OTF files up to 2 MB each are accepted; the log says what was left out and why.
+
+Options:
+
+- `features`: switch parts of the app off for everyone, for example `stickers=off, gifs=off`. Switches: `stickers`, `gifs`, `link_previews`, `voice_to_text`, `scheduled_send`, `polls`, `location`. Everything is on by default.
+- `banner_text`: a short notice shown at the top of everyone's chat list until they close it. A new text shows again for everyone.
+- `quick_reactions`: the reactions offered first, comma separated, for people who never changed their own.
+- `invite_share_text`: the message the app shares through WhatsApp, Viber or SMS. `{link}` and `{code}` are filled in.
+- `invite_subject`, `invite_intro`: the subject and first line of the invitation email. `{inviter}` is filled in.

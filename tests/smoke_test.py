@@ -458,6 +458,37 @@ def moderation_test(owner, friend, friend_id):
     assert membership() == "invite", membership()
 
 
+def looks_test():
+    """The look catalog and its files come straight from the front door,
+    with no sign-in, and are cheap to check again."""
+    import hashlib
+    request = urllib.request.Request(BASE + "/_dartchat/v1/looks",
+                                     headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.headers.get("Content-Encoding") == "gzip", response.headers
+        assert response.headers.get("Access-Control-Allow-Origin") == "*"
+        etag = response.headers["ETag"]
+        import gzip
+        catalog = json.loads(gzip.decompress(response.read()))
+    assert catalog["format"] == 1
+    assert any(t["id"] == "standard" for t in catalog["themes"]), catalog["themes"]
+    assert catalog["stickers"] and catalog["gifs"] and catalog["fonts"]
+    assert catalog["features"]["stickers"] is True
+    again = urllib.request.Request(BASE + "/_dartchat/v1/looks",
+                                   headers={"If-None-Match": etag})
+    try:
+        urllib.request.urlopen(again, timeout=30)
+        raise AssertionError("an unchanged catalog should answer 304")
+    except urllib.error.HTTPError as error:
+        assert error.code == 304, error.code
+    picture = catalog["stickers"][0]["items"][0]["file"]
+    with urllib.request.urlopen(BASE + "/_dartchat/v1/looks/" + picture["path"],
+                                timeout=30) as response:
+        data = response.read()
+        assert "immutable" in response.headers.get("Cache-Control", "")
+    assert hashlib.sha256(data).hexdigest() == picture["sha256"]
+
+
 def main():
     server = HTTPServer(("127.0.0.1", 6190), FakeResend)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -524,6 +555,7 @@ def main():
 
     circles_test(owner, join)
     scheduled_test(owner)
+    looks_test()
 
     # A friend for the group bot test (tests/bot_e2e.py), which runs next.
     lena = expect(

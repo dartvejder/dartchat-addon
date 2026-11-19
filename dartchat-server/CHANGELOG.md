@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.0
+
+- Looks from the server. The add-on now carries the app's themes, colour schemes, backgrounds, message marks and reply looks as data, plus new ones the app never had (themes Sveska, Svemir, Arkada and Strip, colour schemes Mint staklo, Beton and Oblak, picture backgrounds Doodle, Sveska and Zvezde, the Breskva gradient, marks Pivo, Pikado, Kafa and Semafor), three fonts (Comic Neue, Patrick Hand, Press Start 2P, all under the SIL Open Font License), a sticker pack and a GIF pack. New looks need only an add-on update from now on; apps from the next Dart Chat version on pick them up by themselves.
+- `GET /_dartchat/v1/looks` is the catalog (about 13 KB, 4 KB gzipped, asked again with ETag, so an unchanged catalog costs a 304 of a few hundred bytes). Pictures and fonts are under `/_dartchat/v1/looks/files/`, named by their SHA-256 and cached for a year. Both are plain files served by nginx, with no sign-in.
+- Packs of your own: put them in `/share/dartchat/looks` in the same layout as `looks/` in this repository (an item with the same id replaces the built-in one) and restart the add-on. The log lists anything left out and why.
+- New options: `features` (for example `stickers=off, gifs=off`; the switches are stickers, gifs, link_previews, voice_to_text, scheduled_send, polls and location, all on by default), `banner_text` (a notice at the top of everyone's chat list), `quick_reactions` (the reaction row for people who never changed theirs, comma separated), `invite_share_text` (the message the app shares on WhatsApp, Viber or SMS; `{link}` and `{code}` are filled in), `invite_subject` and `invite_intro` (the invitation email's subject and first line; `{inviter}` is filled in).
+- Older apps ignore all of this and keep working as before.
+
 ## 0.20.0
 
 - Invitations for every device. The inviter picks the friend's device (Android, iPhone, web, computer, or none for all of them) and the email shows a button for each: Google Play (`app_link`), TestFlight (new `iphone_link`, default the public Dart Chat TestFlight link), the web app and the Windows and Linux downloads (new `web_link`). When only phones are picked, the email still mentions the Windows, Linux and web versions in a short note. The email also carries one smart link, `<web_link>/join.html#CODE`, which picks the right steps for the phone that opens it.

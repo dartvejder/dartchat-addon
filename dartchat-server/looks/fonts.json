@@ -1,0 +1,17 @@
+[
+ {
+  "id": "comic-neue",
+  "name": "Comic Neue",
+  "file": "fonts/ComicNeue-Regular.ttf"
+ },
+ {
+  "id": "patrick-hand",
+  "name": "Patrick Hand",
+  "file": "fonts/PatrickHand-Regular.ttf"
+ },
+ {
+  "id": "press-start",
+  "name": "Press Start 2P",
+  "file": "fonts/PressStart2P-Regular.ttf"
+ }
+]

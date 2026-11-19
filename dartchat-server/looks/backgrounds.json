@@ -1,0 +1,150 @@
+[
+ {
+  "id": "grid",
+  "name": "Paper grid",
+  "kind": "grid"
+ },
+ {
+  "id": "white",
+  "name": "White",
+  "kind": "plain",
+  "colors": [
+   "#FFFFFF"
+  ],
+  "brightness": "light"
+ },
+ {
+  "id": "dots",
+  "name": "Grey dots",
+  "kind": "dots"
+ },
+ {
+  "id": "darts",
+  "name": "Faint darts",
+  "kind": "darts"
+ },
+ {
+  "id": "sunrise",
+  "name": "Sunrise",
+  "kind": "gradient",
+  "colors": [
+   "#FFF4DC",
+   "#DCEBFA"
+  ],
+  "brightness": "light"
+ },
+ {
+  "id": "night",
+  "name": "Night",
+  "kind": "radial",
+  "colors": [
+   "#27357A",
+   "#0A0F26"
+  ],
+  "brightness": "dark"
+ },
+ {
+  "id": "rings",
+  "name": "Dartboard",
+  "kind": "rings",
+  "colors": [
+   "#E4F3DE"
+  ],
+  "brightness": "light"
+ },
+ {
+  "id": "sunset",
+  "name": "Sunset",
+  "kind": "gradient",
+  "colors": [
+   "#FF7F6B",
+   "#FFD86B"
+  ],
+  "brightness": "light",
+  "bold": true
+ },
+ {
+  "id": "adriatic",
+  "name": "Adriatic",
+  "kind": "gradient",
+  "colors": [
+   "#10245C",
+   "#0E8C8C"
+  ],
+  "brightness": "dark",
+  "bold": true
+ },
+ {
+  "id": "neon",
+  "name": "Neon",
+  "kind": "gradient",
+  "colors": [
+   "#5B1FA8",
+   "#E0409A"
+  ],
+  "brightness": "dark",
+  "bold": true
+ },
+ {
+  "id": "lime",
+  "name": "Lime",
+  "kind": "gradient",
+  "colors": [
+   "#58B82E",
+   "#D9F99D"
+  ],
+  "brightness": "light",
+  "bold": true
+ },
+ {
+  "id": "reddarts",
+  "name": "Red darts",
+  "kind": "darts",
+  "colors": [
+   "#B8261E",
+   "#8C1913"
+  ],
+  "brightness": "dark",
+  "bold": true
+ },
+ {
+  "id": "doodle",
+  "name": "Doodle",
+  "kind": "image",
+  "image": "images/doodle.webp",
+  "fit": "tile",
+  "brightness": "light"
+ },
+ {
+  "id": "sveska",
+  "name": "Sveska",
+  "kind": "image",
+  "image": "images/sveska.webp",
+  "fit": "tile",
+  "brightness": "light"
+ },
+ {
+  "id": "zvezde",
+  "name": "Zvezde",
+  "kind": "image",
+  "image": "images/zvezde.webp",
+  "fit": "tile",
+  "brightness": "dark",
+  "bold": true
+ },
+ {
+  "id": "breskva",
+  "name": "Breskva",
+  "kind": "gradient",
+  "colors": [
+   "#FFD3B6",
+   "#FFAAA5"
+  ],
+  "brightness": "light"
+ },
+ {
+  "id": "plain",
+  "name": "Plain",
+  "kind": "plain"
+ }
+]

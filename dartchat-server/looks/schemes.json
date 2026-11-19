@@ -1,0 +1,151 @@
+[
+ {
+  "id": "lime",
+  "name": "Lime and teal",
+  "seed": "#7FD100",
+  "bubble": "#B4FF00",
+  "on_bubble": "#141D3D",
+  "other_bubble": "#0B6B6A",
+  "on_other_bubble": "#FFFFFF",
+  "accent": "#2B50E8"
+ },
+ {
+  "id": "lime3d",
+  "name": "Lime balloon",
+  "seed": "#7FD100",
+  "bubble": "#B4FF00",
+  "bubble_light": "#E6FF7A",
+  "bubble_dark": "#62C400",
+  "on_bubble": "#141D3D",
+  "accent": "#2B50E8",
+  "style": "extreme"
+ },
+ {
+  "id": "teal",
+  "name": "Teal classic",
+  "seed": "#0E7C7B",
+  "bubble": "#0E7C7B",
+  "on_bubble": "#FFFFFF",
+  "accent": "#F2A541"
+ },
+ {
+  "id": "ocean",
+  "name": "Ocean glass",
+  "seed": "#1E88E5",
+  "bubble": "#1565C0",
+  "bubble_light": "#1976D2",
+  "bubble_dark": "#0D47A1",
+  "on_bubble": "#FFFFFF",
+  "accent": "#7CFFCB",
+  "style": "glossy"
+ },
+ {
+  "id": "sunset",
+  "name": "Sunset",
+  "seed": "#FF7043",
+  "bubble": "#FF7043",
+  "bubble_light": "#FFB74D",
+  "bubble_dark": "#FF5177",
+  "on_bubble": "#3A0A14",
+  "accent": "#FFF176",
+  "style": "glossy"
+ },
+ {
+  "id": "bubblegum",
+  "name": "Bubblegum balloon",
+  "seed": "#EC407A",
+  "bubble": "#FF5FA2",
+  "bubble_light": "#FFB3D1",
+  "bubble_dark": "#F0478C",
+  "on_bubble": "#4A0025",
+  "accent": "#B2FF59",
+  "style": "extreme"
+ },
+ {
+  "id": "neon",
+  "name": "Neon night",
+  "seed": "#7C4DFF",
+  "bubble": "#6A3DF0",
+  "bubble_light": "#7C4DFF",
+  "bubble_dark": "#3A3FE0",
+  "on_bubble": "#FFFFFF",
+  "accent": "#18FFFF",
+  "style": "glossy"
+ },
+ {
+  "id": "gold",
+  "name": "Gold bar",
+  "seed": "#C79100",
+  "bubble": "#FFC928",
+  "bubble_light": "#FFF3A6",
+  "bubble_dark": "#D99A00",
+  "on_bubble": "#3A2500",
+  "accent": "#6A1B9A",
+  "style": "extreme"
+ },
+ {
+  "id": "lava",
+  "name": "Lava balloon",
+  "seed": "#E53935",
+  "bubble": "#FF6A2B",
+  "bubble_light": "#FFAB6B",
+  "bubble_dark": "#F03A2E",
+  "on_bubble": "#2B0500",
+  "accent": "#FFEB3B",
+  "style": "extreme"
+ },
+ {
+  "id": "graphite",
+  "name": "Graphite",
+  "seed": "#546E7A",
+  "bubble": "#263238",
+  "on_bubble": "#FFFFFF",
+  "accent": "#80DEEA"
+ },
+ {
+  "id": "mint",
+  "name": "Mint staklo",
+  "seed": "#2EC4B6",
+  "bubble": "#2EC4B6",
+  "bubble_light": "#9BF6E8",
+  "bubble_dark": "#16867C",
+  "on_bubble": "#06302C",
+  "accent": "#FF6B6B",
+  "style": "glossy"
+ },
+ {
+  "id": "beton",
+  "name": "Beton",
+  "seed": "#78909C",
+  "bubble": "#90A4AE",
+  "on_bubble": "#14181B",
+  "other_bubble": "#37474F",
+  "on_other_bubble": "#FFFFFF",
+  "accent": "#FFB300",
+  "radius": 6
+ },
+ {
+  "id": "oblak",
+  "name": "Oblak",
+  "seed": "#64B5F6",
+  "bubble": "#64B5F6",
+  "on_bubble": "#0B1F33",
+  "other_bubble": "#E3F2FD",
+  "on_other_bubble": "#0B1F33",
+  "accent": "#F06292",
+  "style": "shadow",
+  "round": true,
+  "radius": 26
+ },
+ {
+  "id": "terminal",
+  "name": "Terminal",
+  "seed": "#4AF626",
+  "bubble": "#4AF626",
+  "on_bubble": "#0C0C0C",
+  "other_bubble": "#0C0C0C",
+  "on_other_bubble": "#D7D7D7",
+  "accent": "#3ADBDB",
+  "terminal": true
+ }
+]

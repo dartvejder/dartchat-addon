@@ -38,6 +38,10 @@ RESEND_KEY = os.environ.get("DARTCHAT_RESEND_KEY", "")
 RESEND_BASE = os.environ.get("DARTCHAT_RESEND_BASE", "https://api.resend.com")
 EMAIL_FROM = os.environ.get("DARTCHAT_INVITE_FROM", "")
 APP_LINK = os.environ.get("DARTCHAT_APP_LINK", "")
+# The owner's own words for the invitation email, from the add-on options.
+# {inviter} is replaced by the inviter's name.
+INVITE_SUBJECT = os.environ.get("DARTCHAT_INVITE_SUBJECT", "").strip()
+INVITE_INTRO = os.environ.get("DARTCHAT_INVITE_INTRO", "").strip()
 # Where iPhone friends get the app (a public TestFlight link) and where the web
 # app lives. The web address also serves the invitation page, join.html.
 IPHONE_LINK = os.environ.get("DARTCHAT_IPHONE_LINK", "")
@@ -380,6 +384,10 @@ def desktop_note(code, platforms):
     return note
 
 
+def fill_inviter(text, inviter):
+    return text.replace("{inviter}", inviter)[:300] if text else ""
+
+
 def invite_email(code, inviter, platforms):
     """Returns (text, html) of the invitation email."""
     shown = format_code(code)
@@ -393,8 +401,9 @@ def invite_email(code, inviter, platforms):
             .replace('"', "&quot;")
         )
 
+    intro = fill_inviter(INVITE_INTRO, inviter)
     text_lines = [
-        f"{inviter} invited you to Dart Chat, a private chat for friends.",
+        intro or f"{inviter} invited you to Dart Chat, a private chat for friends.",
         "",
         f"Your invitation code: {shown}",
         "",
@@ -445,7 +454,8 @@ def invite_email(code, inviter, platforms):
         'max-width:520px;color:#14213d">',
         f'<p style="font-size:20px;font-weight:bold">{esc(inviter)} invited you to'
         " Dart Chat 🎯</p>",
-        "<p>A private chat for friends. Your invitation code:</p>",
+        f"<p>{esc(intro)}</p><p>Your invitation code:</p>" if intro
+        else "<p>A private chat for friends. Your invitation code:</p>",
         '<p style="font-size:30px;font-weight:bold;letter-spacing:3px;'
         'background:#f1f5f9;border-radius:12px;padding:10px;text-align:center">'
         f"{shown}</p>",
@@ -505,7 +515,8 @@ def send_invite_email(email, code, inviter, platforms=()):
             {
                 "from": EMAIL_FROM or default_sender(),
                 "to": [email],
-                "subject": f"{inviter} invited you to Dart Chat",
+                "subject": fill_inviter(INVITE_SUBJECT, inviter)
+                or f"{inviter} invited you to Dart Chat",
                 "text": text,
                 "html": html,
             },

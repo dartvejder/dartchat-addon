@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.20.0"
+version: "0.21.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -17,6 +17,9 @@ ports_description:
 watchdog: http://[HOST]:[PORT:6167]/_matrix/client/versions
 # Lets the group bot show group numbers as Home Assistant sensors.
 homeassistant_api: true
+# Read only: the owner's own look packs in /share/dartchat/looks.
+map:
+  - share:ro
 options:
   server_name: ""
   registration_token: ""
@@ -55,6 +58,12 @@ options:
   whisper_port: 10300
   whisper_language: "sr"
   whisper_latin: true
+  features: ""
+  banner_text: ""
+  quick_reactions: ""
+  invite_subject: ""
+  invite_intro: ""
+  invite_share_text: ""
 schema:
   server_name: str
   registration_token: password?
@@ -93,3 +102,9 @@ schema:
   whisper_port: port?
   whisper_language: str?
   whisper_latin: bool?
+  features: str?
+  banner_text: str?
+  quick_reactions: str?
+  invite_subject: str?
+  invite_intro: str?
+  invite_share_text: str?

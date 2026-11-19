@@ -52,6 +52,9 @@ def test_email_for_an_iphone_has_no_play_link(owner):
     text, html = svc.invite_email("ABCD2345", "Boss", ["iphone"])
     assert "testflight.example" in html
     assert "play.example" not in html and "play.example" not in text
+    # The computer versions are always mentioned on the side.
+    assert "Also on a computer" in text and "https://web.example/windows/" in html
+    assert "on a computer" in html
 
 
 def test_invite_on_several_channels(owner):

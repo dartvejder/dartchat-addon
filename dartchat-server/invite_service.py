@@ -369,6 +369,17 @@ def platform_links(code, platforms):
     return links
 
 
+def desktop_note(code, platforms):
+    """The computer versions, always offered as a side note when the main
+    buttons do not already show them."""
+    if not WEB_LINK or not platforms or "computer" in platforms:
+        return []
+    note = [("Windows", f"{WEB_LINK}/windows/"), ("Linux", f"{WEB_LINK}/linux/")]
+    if "web" not in platforms:
+        note.append(("Web", f"{WEB_LINK}/?invite={code}"))
+    return note
+
+
 def invite_email(code, inviter, platforms):
     """Returns (text, html) of the invitation email."""
     shown = format_code(code)
@@ -398,6 +409,11 @@ def invite_email(code, inviter, platforms):
     if any(label.startswith("iPhone") for label, _ in links):
         text_lines.append(
             "   iPhone: first install TestFlight from the App Store, then open the iPhone link."
+        )
+    extras = desktop_note(code, platforms)
+    if extras:
+        text_lines.append(
+            "   Also on a computer: " + ", ".join(f"{label} {url}" for label, url in extras)
         )
     text_lines += [
         '2. Open it and tap "I have an invitation code".',
@@ -454,6 +470,18 @@ def invite_email(code, inviter, platforms):
         '<p><b>2.</b> Open it and tap "I have an invitation code".<br>'
         f"<b>3.</b> Enter the code {shown} and pick a username and password.</p>"
     )
+    if extras:
+        parts.append(
+            '<p style="font-size:14px;color:#475569;background:#f1f5f9;'
+            'border-radius:10px;padding:10px 12px">💻 You can also use Dart Chat'
+            " on a computer: "
+            + " · ".join(
+                f'<a href="{esc(url)}" style="color:#0f766e;font-weight:bold">'
+                f"{esc(label)}</a>"
+                for label, url in extras
+            )
+            + "</p>"
+        )
     parts.append(
         f'<p style="font-size:14px;color:#64748b">The code works once, only for'
         f" you, for {INVITE_DAYS} days. If you did not expect this email, you can"

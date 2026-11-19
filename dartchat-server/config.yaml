@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.19.0"
+version: "0.20.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -24,6 +24,8 @@ options:
   resend_api_key: ""
   invite_email_from: ""
   app_link: ""
+  iphone_link: "https://testflight.apple.com/join/mndgn6db"
+  web_link: "https://web.dartchat.trade"
   max_upload_mb: 20
   log_level: info
   group_bot_name: "Dart Bot"
@@ -60,6 +62,8 @@ schema:
   resend_api_key: password?
   invite_email_from: str?
   app_link: str?
+  iphone_link: str?
+  web_link: str?
   max_upload_mb: int(1,100)
   log_level: list(error|warn|info|debug)
   group_bot_name: str?

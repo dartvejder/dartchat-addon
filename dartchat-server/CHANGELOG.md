@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.0
+
+- Invitations for every device. The inviter picks the friend's device (Android, iPhone, web, computer, or none for all of them) and the email shows a button for each: Google Play (`app_link`), TestFlight (new `iphone_link`, default the public Dart Chat TestFlight link), the web app and the Windows and Linux downloads (new `web_link`). The email also carries one smart link, `<web_link>/join.html#CODE`, which picks the right steps for the phone that opens it.
+- An invitation can go out on several channels at once: `channels` is any of `email`, `link` (the app shares the smart link through Viber, WhatsApp or SMS) and `qr` (the app shows it as a QR code). Without email a name is enough; older apps that send only an address keep working (email).
+- `POST /_dartchat/v1/admin/invites/<id>/resend` sends an invitation again on channels picked anew. A waiting invitation keeps its code; an expired or cancelled one gets a new code.
+- New invitations stop working after 7 days (`DARTCHAT_INVITE_EXPIRED`). Invitations made before this version do not expire.
+- The invitation list shows what became of each email (delivered, bounced, ...) as the email service reports it, when and how it was last sent, and whether an address is on the Play Store tester list, which the owner marks with `PUT /_dartchat/v1/admin/play-testers`.
+- Creating an account answers with `inviter`, so the app can open a chat with the person who sent the invitation.
+
 ## 0.19.0
 
 - Friends can make groups now, not just the owner: a group (or an invitation into one) is allowed when everyone in it, apart from the owners and the group bot, is in one circle together with the person making it. Mixing two circles, public groups and groups from an account in no circle are refused with `DARTCHAT_NOT_ONE_CIRCLE`. The owner may still make any group.

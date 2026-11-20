@@ -2147,7 +2147,134 @@ def schedule_loop():
             lift_due()
         except Exception as error:
             log(f"Could not lift a ban: {error!r}")
+        try:
+            unmute_due()
+        except Exception as error:
+            log(f"Could not unmute a chat: {error!r}")
         time.sleep(5)
+
+
+# ---- muted chats (no notifications for a while) -----------------------------
+#
+# A person can mute a chat for themselves: the app adds a push rule on their
+# own account that keeps the chat server from sending wake-ups for it. For a
+# mute with an end (1 hour, 8 hours) the app also tells this service, which
+# takes the rule off again on time, even while every phone is off. It uses
+# the sign-in that asked; if that one was signed out meanwhile, the sign-in
+# helper (appservice) acts for the person. A mute for good never comes here.
+
+QUIET_FILE = os.environ.get("DARTCHAT_QUIET_STORE", "/data/quiet.json")
+QUIET_MAX_PER_USER = 500
+QUIET_MAX_AHEAD_MS = 366 * 24 * 3600 * 1000
+QUIET_GIVE_UP_SECONDS = 24 * 3600
+
+quiet_lock = threading.Lock()
+quiet = None  # list of {"user_id", "room_id", "until", "token"}
+
+
+def load_quiet():
+    global quiet
+    if quiet is None:
+        quiet = []
+        try:
+            with open(QUIET_FILE, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, list):
+                quiet = [e for e in loaded if isinstance(e, dict)]
+        except (OSError, ValueError):
+            pass
+    return quiet
+
+
+def save_quiet():
+    temporary = f"{QUIET_FILE}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(quiet, handle)
+    os.replace(temporary, QUIET_FILE)
+
+
+def list_quiet(handler, body):
+    user_id, _ = caller(handler)
+    with quiet_lock:
+        mine = [
+            {"room_id": e["room_id"], "until": e["until"]}
+            for e in load_quiet()
+            if e["user_id"] == user_id
+        ]
+    return {"muted": sorted(mine, key=lambda e: e["until"])}
+
+
+def set_quiet(handler, body):
+    """{"room_id", "until": ms} remembers when to unmute; "until": null
+    forgets it (unmuted early, or muted for good)."""
+    user_id, token = caller(handler)
+    room_id = body.get("room_id")
+    until = body.get("until")
+    if not isinstance(room_id, str) or not room_id.startswith("!") or len(room_id) > 255:
+        raise ApiError(400, "M_INVALID_PARAM", "room_id is missing.")
+    if until is not None and (isinstance(until, bool) or not isinstance(until, int)):
+        raise ApiError(400, "M_INVALID_PARAM", "until must be a time in milliseconds.")
+    if until is not None and until > now_ms() + QUIET_MAX_AHEAD_MS:
+        raise ApiError(400, "M_INVALID_PARAM", "That is too far in the future.")
+    with quiet_lock:
+        entries = load_quiet()
+        entries[:] = [
+            e for e in entries if not (e["user_id"] == user_id and e["room_id"] == room_id)
+        ]
+        if until is not None:
+            if sum(1 for e in entries if e["user_id"] == user_id) >= QUIET_MAX_PER_USER:
+                raise ApiError(429, "M_LIMIT_EXCEEDED", "Too many muted chats.")
+            entries.append(
+                {"user_id": user_id, "room_id": room_id, "until": until, "token": token}
+            )
+        save_quiet()
+    return {"room_id": room_id, "until": until}
+
+
+def take_off_quiet_rule(entry):
+    """Removes the push rule that mutes the chat. True when it is gone."""
+    path = f"/pushrules/global/override/{quote(entry['room_id'])}"
+    status, body = chat("DELETE", path, token=entry["token"])
+    if status == 200 or (status == 404 and body.get("errcode") == "M_NOT_FOUND"):
+        return True
+    if status in (401, 403):
+        helper = _load_link_appservice()
+        if helper:
+            try:
+                status, body = http_json(
+                    "DELETE",
+                    f"{HOMESERVER}/_matrix/client/v3{path}?user_id={quote(entry['user_id'])}",
+                    headers={"Authorization": f"Bearer {helper['as_token']}"},
+                )
+            except (urllib.error.URLError, OSError):
+                return False
+            return status == 200 or (status == 404 and body.get("errcode") == "M_NOT_FOUND")
+    return False
+
+
+def unmute_due(now=None):
+    """Unmutes the chats whose time is up. Returns how many."""
+    now = now_ms() if now is None else now
+    with quiet_lock:
+        due = [e for e in load_quiet() if e["until"] <= now]
+    done = 0
+    for entry in due:
+        try:
+            gone = take_off_quiet_rule(entry)
+        except ApiError:
+            gone = False
+        late = now - entry["until"] > QUIET_GIVE_UP_SECONDS * 1000
+        if gone or late:
+            with quiet_lock:
+                if entry in quiet:
+                    quiet.remove(entry)
+                    save_quiet()
+            if gone:
+                done += 1
+            else:
+                log(f"Gave up unmuting a chat for {entry['user_id']}")
+    return done
 
 
 # ---- timed bans and mutes ----------------------------------------------------
@@ -3151,6 +3278,8 @@ ROUTES = [
     ("POST", re.compile(r"/quiz/token"), quiz_token),
     ("POST", re.compile(r"/quiz/whoami"), quiz_whoami),
     ("POST", re.compile(r"/problem"), report_problem),
+    ("GET", re.compile(r"/quiet"), list_quiet),
+    ("PUT", re.compile(r"/quiet"), set_quiet),
 ]
 
 

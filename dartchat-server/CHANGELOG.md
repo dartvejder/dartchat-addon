@@ -1,10 +1,14 @@
 # Changelog
 
-## 0.25.0
+## 0.26.0
 
-- Server stats for the owner. `GET /_dartchat/v1/admin/stats` (owner only) answers who was active and when, how many messages were sent today, yesterday, in 7 and 30 days and since counting began, per day for the last 14 days, per group for 30 days, per person for today, 7 and 30 days, and how much room the server uses and how fast it grows. The app shows it as "Server stats" on the owner screen.
+- Server stats for the owner. `GET /_dartchat/v1/admin/stats` (owner only) answers who was active and when, how many messages were sent today, yesterday, in 7 and 30 days and since counting began, per day for the last 14 days, per group for 30 days, per person for today, 7 and 30 days, and how much room the server uses and how fast it grows. The app shows it as the "Stats" tab on the owner screen.
 - Message counts now also keep a number per person (all chats together), never which chat or what was written. Counting per person starts with this version.
 - "Last seen" is the later of the chat server's own "last active" and the last time the person's app came through the front door, kept in `/data/activity.json` (written at most every 5 minutes per person). Someone who switched off "Show when I am online" stays hidden here too.
+
+## 0.25.0
+
+- Muted chats come back on time. When someone mutes a chat for 1 or 8 hours in the app, the app tells `PUT /_dartchat/v1/quiet` (`room_id`, `until` in ms, or `null` to forget) and this service takes the person's mute rule off when the time is up, even while all their phones are off. It uses that person's own sign-in, or the sign-in helper if they signed out meanwhile. A mute "always" never comes here. Kept in `/data/quiet.json`, never any message.
 
 ## 0.24.0
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.24.0
+
+- Apps report what went wrong when a photo, video, voice message or file could not be sent: `POST /_dartchat/v1/problem` with `kind`, `reason`, `platform`, `version` and `attempts`, signed in as the person. The add-on log then shows a line like `[dartchat-app] @someone:server (android 1.190): photo not sent after 4 tries: Could not reach the server.` Only that short line is kept, never the message or the file, and at most 30 lines per person per hour.
+
 ## 0.23.0
 
 - Quiz invitations, server side. New option `quiz_api_key`: a long random key you make up and also put in the quiz server (Cloudflare Worker secret `KVIZ_KLJUC`). Without it, nothing changes.

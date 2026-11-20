@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -371,6 +372,38 @@ def scheduled_test(owner):
     expect(call("GET", path, token=owner), 200, scheduled=[])
 
 
+def quiet_test(owner):
+    """A chat muted for a while is unmuted by the server on time."""
+    room = expect(
+        call("POST", MATRIX + "/createRoom", {"name": "Quiet"}, owner), 200
+    )["room_id"]
+    rule = f"{MATRIX}/pushrules/global/override/{urllib.parse.quote(room, safe='')}"
+    expect(
+        call(
+            "PUT",
+            rule,
+            {
+                "actions": [],
+                "conditions": [{"kind": "event_match", "key": "room_id", "pattern": room}],
+            },
+            owner,
+        ),
+        200,
+    )
+    expect(call("GET", rule, token=owner), 200)
+    path = INVITE + "/quiet"
+    expect(call("PUT", path, {"room_id": room, "until": 1}), 401)
+    soon = int(time.time() * 1000) + 3000
+    expect(call("PUT", path, {"room_id": room, "until": soon}, owner), 200)
+    expect(call("GET", path, token=owner), 200, muted=[{"room_id": room, "until": soon}])
+    for _ in range(30):
+        if call("GET", rule, token=owner)[0] == 404:
+            break
+        time.sleep(1)
+    expect(call("GET", rule, token=owner), 404)
+    expect(call("GET", path, token=owner), 200, muted=[])
+
+
 def renamed_test(owner, friend, friend_id):
     """The owner's accounts list shows the name someone had before."""
     name = f"{MATRIX}/profile/{friend_id}/displayname"
@@ -561,6 +594,7 @@ def main():
 
     circles_test(owner, join)
     scheduled_test(owner)
+    quiet_test(owner)
     looks_test()
 
     # A friend for the group bot test (tests/bot_e2e.py), which runs next.

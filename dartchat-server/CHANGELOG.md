@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.25.0
+
+- Server stats for the owner. `GET /_dartchat/v1/admin/stats` (owner only) answers who was active and when, how many messages were sent today, yesterday, in 7 and 30 days and since counting began, per day for the last 14 days, per group for 30 days, per person for today, 7 and 30 days, and how much room the server uses and how fast it grows. The app shows it as "Server stats" on the owner screen.
+- Message counts now also keep a number per person (all chats together), never which chat or what was written. Counting per person starts with this version.
+- "Last seen" is the later of the chat server's own "last active" and the last time the person's app came through the front door, kept in `/data/activity.json` (written at most every 5 minutes per person). Someone who switched off "Show when I am online" stays hidden here too.
+
 ## 0.24.0
 
 - Apps report what went wrong when a photo, video, voice message or file could not be sent: `POST /_dartchat/v1/problem` with `kind`, `reason`, `platform`, `version` and `attempts`, signed in as the person. The add-on log then shows a line like `[dartchat-app] @someone:server (android 1.190): photo not sent after 4 tries: Could not reach the server.` Only that short line is kept, never the message or the file, and at most 30 lines per person per hour.

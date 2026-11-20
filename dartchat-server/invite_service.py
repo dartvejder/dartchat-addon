@@ -1412,6 +1412,7 @@ def guard(handler, match, raw):
         return forward(handler, raw)
     user_id, token = caller(handler)
     remember_owner_session(user_id, token)
+    note_seen(user_id)
 
     if match["profile"] and method == "GET":
         target = urllib.parse.unquote(match["profile"])
@@ -1690,6 +1691,7 @@ def count_message(user_id, token, room_id, event_type, body, answer):
     try:
         if user_id == BOT_USER:
             return
+        note_seen(user_id)
         kind = message_kind(event_type, body)
         if kind is None:
             return
@@ -1710,17 +1712,234 @@ def count_message(user_id, token, room_id, event_type, body, answer):
             day = data["days"].setdefault(today.isoformat(), {})
             if kind == "reaction":
                 day["reactions"] = day.get("reactions", 0) + 1
-            elif group:
-                groups = day.setdefault("groups", {})
-                groups[room_id] = groups.get(room_id, 0) + 1
-                if name:
-                    data["rooms"][room_id] = name
             else:
-                day["private"] = day.get("private", 0) + 1
+                # Per person only a number, for the owner's stats screen.
+                people = day.setdefault("people", {})
+                people[user_id] = people.get(user_id, 0) + 1
+                if group:
+                    groups = day.setdefault("groups", {})
+                    groups[room_id] = groups.get(room_id, 0) + 1
+                    if name:
+                        data["rooms"][room_id] = name
+                else:
+                    day["private"] = day.get("private", 0) + 1
             fold_old_days(data, today)
             save_counts(data)
     except Exception as error:  # Counting must never get in the way.
         log(f"Could not count a message: {error!r}")
+
+
+# ---- server stats for the owner -------------------------------------------
+#
+# The owner's "Server stats" screen in the app: who was active and when, how
+# many messages were sent (counted as above, never their content) and how much
+# room the server uses. "Last seen" is the last time a person's app talked to
+# the server through the front door, kept to the minute in a small file.
+
+ACTIVITY_FILE = os.environ.get("DARTCHAT_ACTIVITY_FILE", "/data/activity.json")
+SEEN_SAVE_SECONDS = 300
+STATS_CACHE_SECONDS = 60
+activity_lock = threading.Lock()
+activity = {"seen": None, "saved": {}}
+stats_cache = {"until": 0, "storage": None}
+
+
+def load_activity():
+    try:
+        with open(ACTIVITY_FILE, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = {}
+    seen = data.get("seen") if isinstance(data, dict) else None
+    return {k: v for k, v in (seen or {}).items() if isinstance(v, (int, float))}
+
+
+def seen_times():
+    """user id -> last seen (seconds since 1970)."""
+    with activity_lock:
+        if activity["seen"] is None:
+            activity["seen"] = load_activity()
+            activity["saved"] = dict(activity["seen"])
+        return dict(activity["seen"])
+
+
+def note_seen(user_id, now=None):
+    """Remembers that [user_id] used the app just now. Written to disk at
+    most every few minutes per person, so busy apps do not wear the SSD."""
+    try:
+        if not user_id or user_id == BOT_USER:
+            return
+        now = int(now if now is not None else time.time())
+        seen_times()
+        with activity_lock:
+            activity["seen"][user_id] = now
+            if now - activity["saved"].get(user_id, 0) < SEEN_SAVE_SECONDS:
+                return
+            activity["saved"][user_id] = now
+            tmp = ACTIVITY_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump({"seen": activity["seen"]}, handle, sort_keys=True)
+            os.replace(tmp, ACTIVITY_FILE)
+    except Exception as error:  # Never in the way of the chat itself.
+        log(f"Could not note activity: {error!r}")
+
+
+def storage_numbers():
+    """Space used now and its growth, from the storage report's measuring.
+    Measuring walks the media folder, so it is kept for a minute."""
+    import storage_report
+    from datetime import timedelta
+
+    now = time.time()
+    with activity_lock:
+        if stats_cache["until"] > now and stats_cache["storage"]:
+            return stats_cache["storage"]
+    today = counts_today()
+    entry = storage_report.measure()
+    history = storage_report.load_history()
+
+    def grew(days):
+        found = storage_report.on_or_before(history, today - timedelta(days=days))
+        return storage_report.used(entry) - storage_report.used(found[1]) if found else None
+
+    answer = {
+        "media": entry["media"],
+        "database": entry["database"],
+        "other": entry["other"],
+        "used": storage_report.used(entry),
+        "free": entry["free"],
+        "disk": entry["disk"],
+        "grew_day": grew(1),
+        "grew_month": grew(30),
+    }
+    with activity_lock:
+        stats_cache.update(until=now + STATS_CACHE_SECONDS, storage=answer)
+    return answer
+
+
+def message_numbers(data, today):
+    """Message totals for today, yesterday, 7 and 30 days and everything
+    counted, per day for the last 14 days, per group and per person."""
+    from datetime import timedelta
+
+    days = data.get("days", {})
+    names = data.get("rooms", {})
+
+    def messages(entry):
+        return entry.get("private", 0) + sum(entry.get("groups", {}).values())
+
+    def window(n):
+        start = (today - timedelta(days=n - 1)).isoformat()
+        return [e for d, e in days.items() if start <= d <= today.isoformat()]
+
+    yesterday = days.get((today - timedelta(days=1)).isoformat(), {})
+    week, month = window(7), window(30)
+    totals = {
+        "today": messages(days.get(today.isoformat(), {})),
+        "yesterday": messages(yesterday),
+        "week": sum(messages(e) for e in week),
+        "month": sum(messages(e) for e in month),
+        "all": sum(messages(e) for e in days.values()),
+        "private_month": sum(e.get("private", 0) for e in month),
+        "reactions_month": sum(e.get("reactions", 0) for e in month),
+    }
+    daily = []
+    for back in range(13, -1, -1):
+        day = (today - timedelta(days=back)).isoformat()
+        daily.append({"day": day, "messages": messages(days.get(day, {}))})
+    groups = {}
+    for entry in month:
+        for room, n in entry.get("groups", {}).items():
+            groups[room] = groups.get(room, 0) + n
+    group_rows = sorted(
+        ({"name": names.get(room) or "", "month": n} for room, n in groups.items()),
+        key=lambda row: -row["month"],
+    )
+    people = {}
+    for key, entries in (("today", window(1)), ("week", week), ("month", month)):
+        for entry in entries:
+            for user, n in entry.get("people", {}).items():
+                person = people.setdefault(user, {"today": 0, "week": 0, "month": 0})
+                person[key] += n
+    return totals, daily, group_rows, people, min(days) if days else today.isoformat()
+
+
+def last_active(account, token, seen, now):
+    """The latest of: the chat server's own "last active" for [account] and
+    the last time their app came through the front door. None if unknown."""
+    times = [seen[account]] if account in seen else []
+    try:
+        status, body = chat("GET", f"/presence/{quote(account)}/status", token=token)
+    except ApiError:
+        status, body = 0, {}
+    if status == 200:
+        if body.get("currently_active") or body.get("presence") == "online":
+            times.append(now)
+        ago = body.get("last_active_ago")
+        if isinstance(ago, (int, float)) and ago >= 0:
+            times.append(now - ago / 1000)
+    return max(times) if times else None
+
+
+def server_stats(handler, body):
+    """Owner only: the numbers for the app's "Server stats" screen."""
+    user_id, token = require_admin(handler)
+    today = counts_today()
+    with counts_lock:
+        data = load_counts()
+    totals, daily, groups, counted, since = message_numbers(data, today)
+    seen = seen_times()
+    with store.lock:
+        deactivated = set(store.data["deactivated"])
+    hidden = {BOT_USER, f"@{LINK_SENDER}:{SERVER_NAME}"}
+    accounts = [a for a in all_accounts(token) if a not in hidden] or sorted(
+        (set(seen) | set(counted)) - hidden
+    )
+    now = time.time()
+    people = []
+    for account in accounts:
+        if account in deactivated:
+            continue
+        numbers = counted.get(account, {"today": 0, "week": 0, "month": 0})
+        hidden_online = account != user_id and presence_hidden(account)
+        last = None if hidden_online else last_active(account, token, seen, now)
+        people.append({
+            "user_id": account,
+            # Someone who hid "online" in the app stays hidden here too.
+            "hidden": hidden_online,
+            "last_seen": int(last * 1000) if last else None,
+            "messages_today": numbers["today"],
+            "messages_week": numbers["week"],
+            "messages_month": numbers["month"],
+        })
+    people.sort(key=lambda p: -(p["last_seen"] or 0))
+
+    def active_within(seconds):
+        return sum(
+            1 for p in people
+            if p["last_seen"] and now - p["last_seen"] / 1000 <= seconds
+        )
+
+    try:
+        storage = storage_numbers()
+    except Exception as error:
+        log(f"Could not measure storage for stats: {error!r}")
+        storage = None
+    return {
+        "generated": int(now * 1000),
+        "counting_since": since,
+        "accounts": len(people),
+        "active": {
+            "now": active_within(5 * 60),
+            "today": active_within(24 * 3600),
+            "week": active_within(7 * 24 * 3600),
+        },
+        "messages": totals,
+        "daily": daily,
+        "groups": groups,
+        "people": people,
+        "storage": storage,
+    }
 
 
 # ---- scheduled messages ----------------------------------------------------
@@ -2910,6 +3129,7 @@ ROUTES = [
     ("PUT", re.compile(r"/admin/play-testers"), set_play_tester),
     ("GET", re.compile(r"/admin/users"), list_users),
     ("POST", re.compile(r"/admin/users/deactivate"), deactivate_user),
+    ("GET", re.compile(r"/admin/stats"), server_stats),
     ("GET", re.compile(r"/admin/circles"), list_circles),
     ("POST", re.compile(r"/admin/circles"), create_circle),
     ("PUT", re.compile(r"/admin/circles/([0-9a-f]{16})"), update_circle),

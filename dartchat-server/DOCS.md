@@ -257,6 +257,10 @@ growth figures fill in as days go by. Messages are counted from the moment
 this version is installed, in `/data/message_counts.json`; the server only
 counts them and never sees what they say.
 
+## Server stats
+
+The owner screen in the app has a "Server stats" tab: how many people were active now, today and this week, each person's last time online and how many messages they sent (today, 7 and 30 days, all chats together), messages per day for two weeks, the busiest groups, and how much room the server uses and has left. Only owners can see it (`GET /_dartchat/v1/admin/stats`). Message contents are never read; they are end-to-end encrypted. Someone who switched off "Show when I am online" in the app is shown without a last-seen time.
+
 ## Voice messages to text
 
 Swipe a voice message to the right (or press and hold it and pick "Turn into text") and the app shows the words under it. The phone decrypts the voice message itself and sends the sound only to this server, which hands it to the **Whisper** add-on on the same Home Assistant. Nothing goes to an outside company, the sound is never saved, and the text is forgotten by the server as soon as the phone has it; the phone keeps it with the message.

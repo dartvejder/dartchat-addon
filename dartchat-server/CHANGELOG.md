@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.25.0
+
+- Muted chats come back on time. When someone mutes a chat for 1 or 8 hours in the app, the app tells `PUT /_dartchat/v1/quiet` (`room_id`, `until` in ms, or `null` to forget) and this service takes the person's mute rule off when the time is up, even while all their phones are off. It uses that person's own sign-in, or the sign-in helper if they signed out meanwhile. A mute "always" never comes here. Kept in `/data/quiet.json`, never any message.
+
 ## 0.24.0
 
 - Apps report what went wrong when a photo, video, voice message or file could not be sent: `POST /_dartchat/v1/problem` with `kind`, `reason`, `platform`, `version` and `attempts`, signed in as the person. The add-on log then shows a line like `[dartchat-app] @someone:server (android 1.190): photo not sent after 4 tries: Could not reach the server.` Only that short line is kept, never the message or the file, and at most 30 lines per person per hour.

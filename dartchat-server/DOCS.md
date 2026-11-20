@@ -282,3 +282,13 @@ Options:
 - `quick_reactions`: the reactions offered first, comma separated, for people who never changed their own.
 - `invite_share_text`: the message the app shares through WhatsApp, Viber or SMS. `{link}` and `{code}` are filled in.
 - `invite_subject`, `invite_intro`: the subject and first line of the invitation email. `{inviter}` is filled in.
+
+## Quiz invitations
+
+Dart Chat can invite friends into a game of the Kviz app. Make up a long
+random key (for example 40 letters and digits) and put it in two places: the
+add-on option `quiz_api_key`, and the quiz server's secret `KVIZ_KLJUC`. The
+app then gets a one-hour Dart Chat token from the add-on and passes it to the
+quiz, and the quiz server checks it at `/_dartchat/v1/quiz/whoami` with that
+key. The quiz learns only the account name and display name. Leave the option
+empty to switch quiz invitations off.

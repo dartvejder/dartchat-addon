@@ -1,5 +1,5 @@
 name: Dart Chat Server
-version: "0.22.0"
+version: "0.23.0"
 slug: dartchat_server
 description: Private end-to-end encrypted chat server for Dart Chat
 url: https://github.com/dartvejder/dartchat-addon
@@ -64,6 +64,7 @@ options:
   invite_subject: ""
   invite_intro: ""
   invite_share_text: ""
+  quiz_api_key: ""
 schema:
   server_name: str
   registration_token: password?
@@ -108,3 +109,4 @@ schema:
   invite_subject: str?
   invite_intro: str?
   invite_share_text: str?
+  quiz_api_key: password?

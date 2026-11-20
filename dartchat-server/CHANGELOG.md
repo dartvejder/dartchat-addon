@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.0
+
+- Quiz invitations, server side. New option `quiz_api_key`: a long random key you make up and also put in the quiz server (Cloudflare Worker secret `KVIZ_KLJUC`). Without it, nothing changes.
+- `POST /_dartchat/v1/quiz/token`: the app gets a signed Dart Chat token for the quiz, valid one hour. Bots and closed accounts get none.
+- `POST /_dartchat/v1/quiz/whoami` with `Authorization: Bearer <quiz_api_key>` and `{"openid_token": "..."}`: for the quiz server only, answers `matrix_id`, `displayname` and `expires_in`, or 401. A token stops working when the account is closed or the add-on restarts (the app then asks for a new one).
+
 ## 0.22.0
 
 - The invitation email shows the Dart Chat poster under its first line, linked to the invitation, with a small "*neke stvari su malo preuveličane 😄" under it. The picture comes from `<web_link>/invite-poster.jpg`, so it shows only when `web_link` is set; nothing is attached to the email.

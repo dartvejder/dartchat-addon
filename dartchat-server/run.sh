@@ -24,6 +24,7 @@ WHISPER_PORT="$(opt whisper_port)"
 WHISPER_LANGUAGE="$(opt whisper_language)"
 WHISPER_LATIN="$(jq -r 'if .whisper_latin == false then "false" else "true" end' "$OPTIONS")"
 INVITE_SUBJECT="$(opt invite_subject)"
+QUIZ_KEY="$(opt quiz_api_key)"
 INVITE_INTRO="$(opt invite_intro)"
 
 if [ -z "$SERVER_NAME" ]; then
@@ -124,6 +125,8 @@ keep_running() {
   export DARTCHAT_WHISPER_PORT="${WHISPER_PORT:-10300}"
   export DARTCHAT_WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-sr}"
   export DARTCHAT_WHISPER_LATIN="$WHISPER_LATIN"
+  # The key the quiz server uses to check Dart Chat quiz tokens.
+  export DARTCHAT_QUIZ_KEY="$QUIZ_KEY"
   keep_running "Invitation service" python3 /invite_service.py
 ) &
 # Daily storage email: how much space the chat uses, how fast it grows, and
@@ -145,7 +148,7 @@ keep_running() {
   export PYTHONPATH=/opt/group_bot/lib:/opt/group_bot
   keep_running "Group bot" python3 -m group_bot
 ) &
-unset RESEND_KEY REGISTRATION_TOKEN
+unset RESEND_KEY REGISTRATION_TOKEN QUIZ_KEY
 
 # Looks from the server: themes, colours, backgrounds, message marks, fonts,
 # stickers and GIFs, plus the owner's switches and notice. The apps fetch

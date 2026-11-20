@@ -14,6 +14,8 @@ Uses only the Python standard library.
 """
 
 import base64
+import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -2771,6 +2773,82 @@ def poll_transcribe(handler, body, job_id):
     return answer
 
 
+# Quiz invitations: the app asks for a short-lived Dart Chat token and passes
+# it to the quiz app, whose server checks it here with the shared quiz key.
+QUIZ_KEY = os.environ.get("DARTCHAT_QUIZ_KEY", "").strip()
+QUIZ_TOKEN_SECONDS = 3600
+# Signs quiz tokens. A new key on every start: a token lives one hour, and an
+# app simply asks for a new one when the quiz says the old one is unknown.
+quiz_signing_key = secrets.token_bytes(32)
+
+
+def b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def unb64url(text):
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def quiz_sign(payload):
+    return hmac.new(quiz_signing_key, payload.encode(), hashlib.sha256).digest()
+
+
+def quiz_account_ok(user_id):
+    """Only active people sign in to the quiz: no bots, no closed accounts."""
+    if not isinstance(user_id, str) or not user_id.endswith(":" + SERVER_NAME):
+        return False
+    if user_id in (BOT_USER, f"@{LINK_SENDER}:{SERVER_NAME}"):
+        return False
+    with store.lock:
+        return user_id not in store.data["deactivated"]
+
+
+def quiz_token(handler, body):
+    """A Dart Chat token for the quiz app, valid for one hour."""
+    if not QUIZ_KEY:
+        raise ApiError(404, "DARTCHAT_NO_QUIZ", "The quiz is not set up on this server.")
+    user_id, token = caller(handler)
+    if not quiz_account_ok(user_id):
+        raise ApiError(403, "M_FORBIDDEN", "This account cannot play the quiz.")
+    name = current_display_name(user_id, token)[:64]
+    expires = int(time.time()) + QUIZ_TOKEN_SECONDS
+    payload = b64url(json.dumps({"u": user_id, "n": name, "e": expires},
+                                separators=(",", ":")).encode())
+    return {
+        "token": f"dcq1.{payload}.{b64url(quiz_sign(payload))}",
+        "expires_in": QUIZ_TOKEN_SECONDS,
+    }
+
+
+def quiz_whoami(handler, body):
+    """For the quiz server only: who a Dart Chat quiz token belongs to."""
+    if not QUIZ_KEY:
+        raise ApiError(404, "DARTCHAT_NO_QUIZ", "The quiz is not set up on this server.")
+    header = handler.headers.get("Authorization", "")
+    given = header[7:].strip() if header.startswith("Bearer ") else ""
+    if not secrets.compare_digest(given.encode(), QUIZ_KEY.encode()):
+        raise ApiError(401, "M_UNKNOWN_TOKEN", "Wrong quiz key.")
+    token = body.get("openid_token")
+    unknown = ApiError(401, "M_UNKNOWN_TOKEN", "Unknown or expired token.")
+    if not isinstance(token, str) or len(token) > 512:
+        raise unknown
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "dcq1":
+        raise unknown
+    try:
+        signature = unb64url(parts[2])
+        data = json.loads(unb64url(parts[1]))
+    except (ValueError, TypeError):
+        raise unknown
+    if not secrets.compare_digest(signature, quiz_sign(parts[1])):
+        raise unknown
+    left = int(data.get("e", 0)) - int(time.time()) if isinstance(data, dict) else 0
+    if left <= 0 or not quiz_account_ok(data.get("u")):
+        raise unknown
+    return {"matrix_id": data["u"], "displayname": data.get("n") or "", "expires_in": left}
+
+
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
     ("POST", re.compile(r"/register"), register),
@@ -2799,6 +2877,8 @@ ROUTES = [
     ("POST", re.compile(r"/transcribe"), start_transcribe),
     ("GET", re.compile(r"/transcribe/([0-9a-f]{24})"), poll_transcribe),
     ("POST", re.compile(r"/link/([A-Za-z0-9_-]{22,64})/approve"), approve_link),
+    ("POST", re.compile(r"/quiz/token"), quiz_token),
+    ("POST", re.compile(r"/quiz/whoami"), quiz_whoami),
 ]
 
 

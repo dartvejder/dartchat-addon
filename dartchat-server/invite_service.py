@@ -2849,6 +2849,57 @@ def quiz_whoami(handler, body):
     return {"matrix_id": data["u"], "displayname": data.get("n") or "", "expires_in": left}
 
 
+# Problems the apps report, such as a photo that could not be sent. They go
+# to the add-on log, so a failure on someone's phone leaves a trace here.
+# Only the kind, a short reason and the app's platform and version come
+# along, never the message or the file.
+PROBLEM_KINDS = {"photo", "video", "voice", "file", "message", "pick", "other"}
+PROBLEMS_PER_HOUR = 30
+problem_counts = {}
+problem_lock = threading.Lock()
+
+
+def problem_text(value, limit):
+    """[value] as one short, printable line."""
+    if not isinstance(value, str):
+        return ""
+    text = "".join(ch if ch.isprintable() else " " for ch in value)
+    return " ".join(text.split())[:limit]
+
+
+def report_problem(handler, body):
+    user_id, _ = caller(handler)
+    kind = body.get("kind")
+    if kind not in PROBLEM_KINDS:
+        raise ApiError(400, "M_BAD_JSON", "Unknown kind of problem.")
+    reason = problem_text(body.get("reason"), 300)
+    if not reason:
+        raise ApiError(400, "M_BAD_JSON", "Say what went wrong in 'reason'.")
+    hour = int(time.time() // 3600)
+    with problem_lock:
+        for key in [k for k in problem_counts if k[1] != hour]:
+            del problem_counts[key]
+        count = problem_counts.get((user_id, hour), 0) + 1
+        problem_counts[(user_id, hour)] = count
+    if count > PROBLEMS_PER_HOUR:
+        return {"logged": False}
+    app = " ".join(
+        part
+        for part in (
+            problem_text(body.get("platform"), 20),
+            problem_text(body.get("version"), 20),
+        )
+        if part
+    )
+    attempts = body.get("attempts")
+    tries = f" after {attempts} tries" if isinstance(attempts, int) and 0 < attempts < 100 else ""
+    print(
+        f"[dartchat-app] {user_id} ({app or 'unknown app'}): {kind} not sent{tries}: {reason}",
+        flush=True,
+    )
+    return {"logged": True}
+
+
 ROUTES = [
     ("GET", re.compile(r"/status"), get_status),
     ("POST", re.compile(r"/register"), register),
@@ -2879,6 +2930,7 @@ ROUTES = [
     ("POST", re.compile(r"/link/([A-Za-z0-9_-]{22,64})/approve"), approve_link),
     ("POST", re.compile(r"/quiz/token"), quiz_token),
     ("POST", re.compile(r"/quiz/whoami"), quiz_whoami),
+    ("POST", re.compile(r"/problem"), report_problem),
 ]
 
 

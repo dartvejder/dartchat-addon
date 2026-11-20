@@ -93,6 +93,8 @@ def test_counting_groups_private_and_repeats(tmp_path, monkeypatch):
     monkeypatch.setattr(invite_service, "COUNTS_FILE", str(path))
     monkeypatch.setattr(invite_service, "room_kinds", {})
     monkeypatch.setattr(invite_service, "recent_events", [])
+    monkeypatch.setattr(invite_service, "ACTIVITY_FILE", str(tmp_path / "activity.json"))
+    monkeypatch.setattr(invite_service, "activity", {"seen": None, "saved": {}})
 
     def fake_chat(method, p, body=None, token=None):
         if p.endswith("m.room.name"):
@@ -108,5 +110,10 @@ def test_counting_groups_private_and_repeats(tmp_path, monkeypatch):
     invite_service.count_message(invite_service.BOT_USER, "t", "!group:x", "m.room.message", msg, b'{"event_id":"$4"}')
     data = json.loads(path.read_text())
     (day,) = data["days"].values()
-    assert day == {"groups": {"!group:x": 1}, "private": 1, "reactions": 1}
+    assert day == {
+        "groups": {"!group:x": 1},
+        "private": 1,
+        "reactions": 1,
+        "people": {"@a:x": 2},
+    }
     assert data["rooms"] == {"!group:x": "Ekipa"}

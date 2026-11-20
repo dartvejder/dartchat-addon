@@ -1901,12 +1901,13 @@ def server_stats(handler, body):
         if account in deactivated:
             continue
         numbers = counted.get(account, {"today": 0, "week": 0, "month": 0})
-        hidden_online = account != user_id and presence_hidden(account)
-        last = None if hidden_online else last_active(account, token, seen, now)
+        last = last_active(account, token, seen, now)
         people.append({
             "user_id": account,
-            # Someone who hid "online" in the app stays hidden here too.
-            "hidden": hidden_online,
+            # The owner sees everyone, also people who hid "online" from
+            # their friends ("hidden" stays false so the app shows the time).
+            "hidden": False,
+            "hides_online": account != user_id and presence_hidden(account),
             "last_seen": int(last * 1000) if last else None,
             "messages_today": numbers["today"],
             "messages_week": numbers["week"],

@@ -112,12 +112,13 @@ def test_stats_people_activity_and_hidden(monkeypatch):
     monkeypatch.setattr(service, "chat", chat)
     answer = service.server_stats(Handler(), {})
     names = [p["user_id"] for p in answer["people"]]
-    assert names == ["@dottore:chat.test", "@ana:chat.test", "@sky:chat.test"]
-    ana = answer["people"][1]
+    assert names == ["@dottore:chat.test", "@sky:chat.test", "@ana:chat.test"]
+    ana = answer["people"][2]
     assert abs(ana["last_seen"] / 1000 - (now - 3 * 3600)) < 5
-    sky = answer["people"][2]
-    assert sky["hidden"] is True and sky["last_seen"] is None
-    assert answer["active"] == {"now": 1, "today": 2, "week": 2}
+    sky = answer["people"][1]
+    assert sky["hidden"] is False and sky["hides_online"] is True
+    assert sky["last_seen"] is not None
+    assert answer["active"] == {"now": 2, "today": 3, "week": 3}
     assert answer["accounts"] == 3
     assert answer["storage"] == {"used": 1}
 

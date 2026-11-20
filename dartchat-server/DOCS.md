@@ -259,7 +259,7 @@ counts them and never sees what they say.
 
 ## Server stats
 
-The owner screen in the app has a "Server stats" tab: how many people were active now, today and this week, each person's last time online and how many messages they sent (today, 7 and 30 days, all chats together), messages per day for two weeks, the busiest groups, and how much room the server uses and has left. Only owners can see it (`GET /_dartchat/v1/admin/stats`). Message contents are never read; they are end-to-end encrypted. Someone who switched off "Show when I am online" in the app is shown without a last-seen time.
+The owner screen in the app has a "Server stats" tab: how many people were active now, today and this week, each person's last time online and how many messages they sent (today, 7 and 30 days, all chats together), messages per day for two weeks, the busiest groups, and how much room the server uses and has left. Only owners can see it (`GET /_dartchat/v1/admin/stats`). Message contents are never read; they are end-to-end encrypted. The owner sees everyone's last-seen time here, also of people who switched off "Show when I am online" for their friends.
 
 ## Voice messages to text
 

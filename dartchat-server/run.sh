@@ -182,6 +182,12 @@ proxy_hide_header Access-Control-Allow-Methods;
 proxy_hide_header Access-Control-Allow-Headers;
 EOF
 
+# A browser opening the bare chat address lands on the web app instead.
+case "$WEB_LINK" in
+  https://*) ROOT_ANSWER="return 302 $WEB_LINK;" ;;
+  *) ROOT_ANSWER="return 404;" ;;
+esac
+
 # Front door: one port for the apps. Chat traffic goes to the chat server and
 # /_dartchat/ goes to the invitation service.
 cat > /tmp/nginx.conf <<EOF
@@ -239,6 +245,15 @@ http {
     # This server does not talk to other chat servers.
     location /_matrix/federation/ {
       return 404;
+    }
+    # The chat server's own web pages (welcome page, account sign-in and
+    # sign-up) would go around the invitation and circle checks above, and
+    # the apps never use them. The bare address sends people to the web app.
+    location /_continuwuity/ {
+      return 404;
+    }
+    location = / {
+      ${ROOT_ANSWER}
     }
     location / {
       proxy_pass http://127.0.0.1:6166;

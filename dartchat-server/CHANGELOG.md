@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.26.1
+
+- The chat server's own web pages under `/_continuwuity/` (welcome page, account sign-in and sign-up) are closed. They went around the invitation codes, circles and the wrong-code limit, and the apps never use them.
+- Opening the bare chat address in a browser now goes to the web app (`web_link`), or answers 404 when no web link is set.
+
 ## 0.26.0
 
 - Server stats for the owner. `GET /_dartchat/v1/admin/stats` (owner only) answers who was active and when, how many messages were sent today, yesterday, in 7 and 30 days and since counting began, per day for the last 14 days, per group for 30 days, per person for today, 7 and 30 days, and how much room the server uses and how fast it grows. The app shows it as the "Stats" tab on the owner screen.
